@@ -5,11 +5,11 @@ description: Set up and run yass, which keeps Claude Code on whichever subscript
 
 # yass — Yet Another Seat Switcher for Claude Code
 
-All Claude Code sessions on this Mac share one login in the macOS Keychain. yass keeps several seats (logins and `claude setup-token` keys) in `~/.yass/` and swaps that login, which moves every session to another seat within ~30 s, with no restart. Who decides is a model: the **seat-check** agent of this plugin measures the seats and applies the owner's rules from `~/.yass/policy.md`, written in the owner's own words. This plugin's hooks start it in the background (`claude -p`) right after a compaction and at most every `check_every_min` minutes while sessions work. When many subagents are running, a switch waits: the main threads get a one-time note to stop starting new subagents, and the switch happens once the running ones have finished (or after 20 minutes); then a second note tells them to resume.
+All Claude Code sessions on this computer share one login (the store): the Keychain on macOS, `~/.claude/.credentials.json` on Linux. yass keeps several seats (logins and `claude setup-token` keys) in `~/.yass/` and swaps that login, which moves every session to another seat with no restart (macOS within ~30 s, Linux on the next request). Windows is not supported yet. Who decides is a model: the **seat-check** agent of this plugin measures the seats and applies the owner's rules from `~/.yass/policy.md`, written in the owner's own words. This plugin's hooks start it in the background (`claude -p`) right after a compaction and at most every `check_every_min` minutes while sessions work. When many subagents are running, a switch waits: the main threads get a one-time note to stop starting new subagents, and the switch happens once the running ones have finished (or after 20 minutes); then a second note tells them to resume.
 
 ## Rules for you
 
-- **Never let a secret into the conversation.** Don't print, cat, Read or grep `credentials.json`, the Keychain value or a token; use only the commands below, which move secrets file-to-file. Never ask the owner to paste a token into the chat, and tell them not to run `claude setup-token` through `!` here: its output would land in the conversation.
+- **Never let a secret into the conversation.** Don't print, cat, Read or grep `credentials.json`, the store or a token; use only the commands below, which move secrets file-to-file. Never ask the owner to paste a token into the chat, and tell them not to run `claude setup-token` through `!` here: its output would land in the conversation.
 - **Never** `/logout` or `claude auth logout` to change accounts: logging out revokes the login that was saved. `/login` alone is safe.
 - Ask one question at a time. Speak the owner's language; write files in English.
 
@@ -32,14 +32,14 @@ D=~/.yass; c=$(jq -c '[.oauthAccount.accountUuid, .oauthAccount.organizationUuid
 Only a seat marked `saved already` counts. The same `accountUuid` with another `organizationUuid` is a new seat: never refresh the other organization's seat with this login. If not saved, propose a short seat name (lowercase, from the organization, e.g. `acme`), and save it:
 ```bash
 D=~/.yass; umask 077; S="$D/seats/<seat>"; mkdir -p "$S"
-security find-generic-password -s "Claude Code-credentials" -w > "$S/credentials.json" && jq '.oauthAccount' ~/.claude.json > "$S/account.json" && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.json" >/dev/null && echo saved || echo "NOT a /login login"
+case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w ;; *) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ;; esac > "$S/credentials.json" && jq '.oauthAccount' ~/.claude.json > "$S/account.json" && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.json" >/dev/null && echo saved || echo "NOT a /login login"
 jq -n --arg id "<seat>" --arg label "<organization (email)>" --arg plan "<plan, if known>" --slurpfile a "$S/account.json" '($a[0].userRateLimitTier // "") as $t | {id: $id, kind: "login", label: $label, plan: $plan, capacity: (if ($t|test("20x")) then 20 elif ($t|test("5x")) then 5 else 1 end), owner: "me", notes: "", added: (now|todate)}' > "$S/meta.json"
 jq --arg t "<seat>" '.active = $t' "$D/config.json" > "$D/c.tmp" && mv "$D/c.tmp" "$D/config.json"
 ```
 If it is saved already as `<seat>`, refresh its credentials instead (a login rotates its tokens):
 ```bash
 D=~/.yass; umask 077; S="$D/seats/<seat>"
-security find-generic-password -s "Claude Code-credentials" -w > "$S/credentials.new" && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo NOT SAVED; }
+case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w ;; *) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ;; esac > "$S/credentials.new" && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo NOT SAVED; }
 ```
 
 Then measure it: start the **seat-check** agent (Agent tool, `subagent_type: yass:seat-check`) with `Measure only.` and report its line.
@@ -47,14 +47,14 @@ Then measure it: start the **seat-check** agent (Agent tool, `subagent_type: yas
 **3. More logins.** Ask whether the owner has another account to add. If so: "Type `/login` and sign in with the next account. Don't use `/logout`." When they're back, run `claude auth status`; if the account or organization changed, repeat step 2 for it. Repeat until there are no more logins.
 
 **4. Keys.** Ask whether they have long-lived keys (`claude setup-token`, valid a year, possibly from other people's accounts). For each key:
-- the owner runs `claude setup-token` **in a separate terminal**, signs in with that account in the browser, copies the printed token and tells you "copied";
-- you save it straight from the clipboard as the next free `k<N>` and clear the clipboard. Ask nothing: no name, owner or plan. Say "saved as k<N>"; the owner can copy the next key right away. If they mention whose key it is or its plan, put that in `owner`/`plan`/`notes`.
+- the owner runs `claude setup-token` **in a separate terminal**, signs in with that account in the browser, copies the printed token and tells you "copied". On Linux without a desktop clipboard (a server, SSH), they instead run in that terminal `(umask 077; read -rs T; printf %s "$T" > ~/.yass/inbox.token)`, paste the token, press Enter (nothing is shown) and tell you;
+- you save it straight from `inbox.token` or the clipboard as the next free `k<N>`, and clear both. Ask nothing: no name, owner or plan. Say "saved as k<N>"; the owner can copy the next key right away. If they mention whose key it is or its plan, put that in `owner`/`plan`/`notes`.
 ```bash
 D=~/.yass; umask 077; n=$(ls "$D/seats" | sed -n 's/^k\([0-9][0-9]*\)$/\1/p' | sort -n | tail -1); id="k$((${n:-0} + 1))"; S="$D/seats/$id"; mkdir -p "$S"
-pbpaste | tr -d '[:space:]' > "$S/token.tmp"; pbcopy < /dev/null
+if [ -s "$D/inbox.token" ]; then cat "$D/inbox.token"; rm -f "$D/inbox.token"; elif [ "$(uname -s)" = Darwin ]; then pbpaste; pbcopy < /dev/null; elif command -v wl-paste >/dev/null; then wl-paste; wl-copy --clear; elif command -v xclip >/dev/null; then xclip -o -selection clipboard; printf '' | xclip -selection clipboard; fi | tr -d '[:space:]' > "$S/token.tmp"
 grep -Eq '^sk-ant-oat01-[A-Za-z0-9_-]{20,}$' "$S/token.tmp" && jq -n -c --rawfile t "$S/token.tmp" '{claudeAiOauth: {accessToken: $t, refreshToken: null, expiresAt: ((now + 364*86400)*1000|floor), scopes: ["user:inference"], subscriptionType: null, rateLimitTier: null}}' > "$S/credentials.json"; rm -f "$S/token.tmp"
-h=$(jq -r .claudeAiOauth.accessToken "$S/credentials.json" 2>/dev/null | shasum); for o in $(ls "$D/seats"); do [ "$o" != "$id" ] && [ "$(jq -r .claudeAiOauth.accessToken "$D/seats/$o/credentials.json" | shasum)" = "$h" ] && { echo "same key as $o"; rm -f "$S/credentials.json"; }; done
-if [ -s "$S/credentials.json" ]; then jq -n --arg id "$id" '{id: $id, kind: "key", label: ("key " + $id), owner: "", plan: "", notes: "", added: (now|todate)}' > "$S/meta.json"; echo "saved $id"; else rmdir "$S"; echo "not saved: the clipboard did not hold a new setup-token"; fi
+h=$(jq -r .claudeAiOauth.accessToken "$S/credentials.json" 2>/dev/null); for o in $(ls "$D/seats"); do [ "$o" != "$id" ] && [ -n "$h" ] && [ "$(jq -r .claudeAiOauth.accessToken "$D/seats/$o/credentials.json")" = "$h" ] && { echo "same key as $o"; rm -f "$S/credentials.json"; }; done
+if [ -s "$S/credentials.json" ]; then jq -n --arg id "$id" '{id: $id, kind: "key", label: ("key " + $id), owner: "", plan: "", notes: "", added: (now|todate)}' > "$S/meta.json"; echo "saved $id"; else rmdir "$S"; echo "not saved: no new setup-token in inbox.token or the clipboard"; fi
 ```
 
 Keep taking keys until the owner says they're done ("done", «готово»). Then measure all seats with the seat-check agent (`Measure all.`): it also shows each key works. (`Seat check. Trigger: manual.` only after step 5.)
@@ -94,4 +94,4 @@ Then work it out and answer in a few lines, in the owner's language:
 - **Pause / resume** automatic checks: set `.auto` to `false` / `true` in `config.json` (the hooks read it). **How often** to check while working: `.check_every_min`.
 - **Change the rules**: edit `policy.md` with the owner's words, read the change back.
 - **Add** a seat: onboarding steps 2–4. **Remove** one (never the active one): `mv "$D/seats/<seat>" "$D/removed-<seat>-$(date +%s)"`.
-- **Something broke** (the Keychain holds a login no seat knows, a switch failed): `/login` with any saved account restores a working login; then save it again (step 2).
+- **Something broke** (the store holds a login no seat knows, a switch failed): `/login` with any saved account restores a working login; then save it again (step 2).

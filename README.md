@@ -15,12 +15,12 @@ compaction, or every N minutes of activity (you pick N)
         │  hook (a one-line shell command)
         ▼
 claude -p --agent seat-check      ← a model in the background, your session isn't touched
-        │  1. which seat is in the Keychain now
+        │  1. which seat is in the login store now (Keychain / credentials file)
         │  2. probe the seats: one tiny request each, read back the rate-limit windows
         │  3. apply ~/.yass/policy.md, your rules in your words
-        │  4. switch: save the current login, write the target into the Keychain
+        │  4. switch: save the current login, write the target into the store
         ▼
-every Claude Code session on this Mac moves to the new seat within ~30 s, no restart
+every Claude Code session on this computer moves to the new seat, no restart
 and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)
 ```
 
@@ -61,8 +61,9 @@ Start a new session and say "set up my seats" (or run `/yass:seats`). The onboar
 The hooks do nothing until onboarding is finished.
 
 Requirements:
-- macOS, because the login lives in the Keychain;
-- `jq` and `xxd`, both ship with macOS;
+- macOS or Linux. Where the login lives ([Claude Code docs](https://code.claude.com/docs/en/authentication#credential-management)): the Keychain on macOS (sessions pick up a swap within ~30 s), `~/.claude/.credentials.json` on Linux (a running session re-reads it before every request; verified in a container with Claude Code 2.1.290). Windows: not yet, see [TODO.md](TODO.md);
+- `jq` (macOS ships it; on Linux install it), plus `xxd` on macOS (ships with it);
+- on Linux, adding keys uses `wl-paste` or `xclip` when there is a desktop clipboard; on a server you save the token to `~/.yass/inbox.token` from your own terminal instead (onboarding shows how);
 - written against Claude Code 2.1.288.
 
 ## Safety
@@ -70,7 +71,7 @@ Requirements:
 - Tokens never reach a model. Prompts move them file-to-file inside shell commands and compare them only by hash. The seat files are `0600` in a `0700` folder.
 - `/logout` revokes the login it ends, so the prompts never use it. `/login` alone is safe.
 - A login rotates its refresh token. Before every switch the current login is saved back to its seat, with the previous copy kept as `credentials.prev.json`. Swaps also wait while a login is about to renew.
-- Sessions that run on `CLAUDE_CODE_OAUTH_TOKEN` or an API key don't use the Keychain. The tool leaves them alone.
+- Sessions that run on `CLAUDE_CODE_OAUTH_TOKEN` or an API key don't use the login store. The tool leaves them alone.
 - Only the official `claude` binary talks to Anthropic. There is no proxy and no direct API call.
 - Use only seats you are entitled to use. Borrowed keys need their owner's consent, and the reserve in the default rules exists for that owner.
 
