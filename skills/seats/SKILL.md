@@ -3,7 +3,7 @@ name: seats
 description: Set up and run yass, which keeps Claude Code on whichever subscription seat (account or setup-token key) still has room, by rules the owner states in plain words. Use for onboarding ("set up seats", "add an account/key"); for limits and usage questions in any language: how much is used or left across all seats, burn rate, runway, a limits summary ("limits", "how much is left", "usage summary", /yass:seats limits); for the seats' status, switching seats by hand, pausing, or changing the switching rules.
 ---
 
-# yass — Yet Another Seat Switcher
+# yass — Yet Another Seat Switcher for Claude Code
 
 All Claude Code sessions on this Mac share one login in the macOS Keychain. yass keeps several seats (logins and `claude setup-token` keys) in `~/.yass/` and swaps that login, which moves every session to another seat within ~30 s, with no restart. Who decides is a model: the **seat-check** agent of this plugin measures the seats and applies the owner's rules from `~/.yass/policy.md`, written in the owner's own words. This plugin's hooks start it in the background (`claude -p`) right after a compaction and at most every `check_every_min` minutes while sessions work. When many subagents are running, a switch waits: the main threads get a one-time note to stop starting new subagents, and the switch happens once the running ones have finished (or after 20 minutes); then a second note tells them to resume.
 
