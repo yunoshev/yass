@@ -1,8 +1,12 @@
 # yass — Yet Another Seat Switcher
 
-Keeps Claude Code on whichever of your subscription seats still has room. It watches the 5-hour and 7-day limits of every seat, decides by rules you state **in plain words**, and swaps the login all your sessions share.
+## NO SCRIPTS. PURE PROMPTS. YOUR RULES, IN YOUR OWN WORDS.
 
-There is no code in it: a skill, an agent prompt, three one-line hooks and a Markdown file with your rules.
+- **No code to run.** No daemon, no proxy, no wrapper, no binary: a skill, an agent prompt, three one-line hooks. A model reads your rules and does the switching itself, with the shell commands written in its prompt.
+- **You just say how.** "Logins first, keys only as a reserve", "keep 30% of Bob's key for him": you tell Claude, it goes into `~/.yass/policy.md` in your words, and that file is what decides. To change a rule, say so.
+- **Logins and long-lived tokens.** Besides `/login` accounts, yass takes the long-lived tokens that `claude setup-token` generates, ["a one-year OAuth token"](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token) in Claude Code's docs, so a subscription shared with you as a token is one more seat. Copy the token, say "copied", done: it becomes `k1`, `k2`, …
+
+Keeps Claude Code on whichever of your subscription seats still has room. It watches the 5-hour and 7-day limits of every seat, decides by your rules, and swaps the login all your sessions share.
 
 ## How it works
 
@@ -19,7 +23,7 @@ claude -p --agent seat-check      ← a model in the background, your session is
 every Claude Code session on this Mac moves to the new seat within ~30 s, no restart
 ```
 
-- **Seats** are `/login` accounts (they renew themselves) and `claude setup-token` keys (valid for a year).
+- **Seats** are `/login` accounts (they renew themselves) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
 - **Your rules** live in `~/.yass/policy.md`. Onboarding starts from a default and rewrites it with what you say. The default:
   - spread the load evenly, looking at what each seat used last period;
   - keys never above 70% of either window, with the weekly cap released toward 90% on a key's last day if its owner isn't using it;
