@@ -21,6 +21,7 @@ claude -p --agent seat-check      ← a model in the background, your session is
         │  4. switch: save the current login, write the target into the Keychain
         ▼
 every Claude Code session on this Mac moves to the new seat within ~30 s, no restart
+and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)
 ```
 
 - **Seats** are `/login` accounts (they renew themselves) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
@@ -80,7 +81,7 @@ Requirements:
 | `skills/seats/SKILL.md` | onboarding and everyday requests: status, switch, pause, rules |
 | `skills/seats/default-policy.md` | the default rules onboarding starts from |
 | `agents/seat-check.md` | the background checker: measure, decide, switch |
-| `hooks/hooks.json` | three one-line hooks: compaction and the activity pulse start the checker; `PostToolUse` delivers the wind-down/resume notes to the main thread; `SubagentStop` starts a planned switch once subagents have wound down |
+| `hooks/hooks.json` | three one-line hooks: compaction and the activity pulse start the checker; `PostToolUse` shows each session a one-line status after a switch and delivers the wind-down/resume notes to the main thread; `SubagentStop` starts a planned switch once subagents have wound down |
 | `~/.yass/` | your seats, `policy.md`, `usage.jsonl`, `journal.md` |
 
 ## License

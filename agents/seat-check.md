@@ -30,6 +30,7 @@ Finish with one line: what you measured, what you decided, what you did.
 - `config.json`: `model` (for checks), `auto` (false = hooks do nothing), `check_every_min` (the pulse: at most one check per this many minutes of activity), `active` (seat in the Keychain), `last_switch` (epoch seconds).
 - `pending.json`: a planned switch waiting for subagents to wind down: `{id, target, reason, since, deadline, max_live_context, after?}` (epoch seconds). The SubagentStop hook starts it once the live subagents' context drops to `max_live_context` or the `deadline` passes; while it waits it is not run before `after`. `run/pending.taken` is the plan the hook just handed to you.
 - `notice.json`: `{id, text}`, a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it).
+- `switched.json`: `{id, msg}`, the one-line status after a switch that every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
 - `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (optional, size relative to Pro: 1, 5, 20; informational, totals count every seat as 100%), `notes` (the owner's rules for this seat).
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
@@ -126,7 +127,9 @@ d. Record and tell the owner:
 ```bash
 D=~/.yass; jq --arg t "<to>" '.active = $t | .last_switch = (now|floor)' "$D/config.json" > "$D/config.tmp" && mv "$D/config.tmp" "$D/config.json"
 osascript -e 'display notification "<from> → <to>: <short reason>" with title "yass"'
+jq -s -c --arg to "<to>" --arg from "<from>" 'group_by(.seat) | map(max_by(.t)) | map({key: .seat, value: {h5: (if (.h5_reset // 0) < now then 0 else .h5 end), d7: (if (.d7_reset // 0) < now then 0 else .d7 end)}}) | from_entries as $u | def f($s): "\($s) \($u[$s].h5 // "?")%/\($u[$s].d7 // "?")%"; {id: (now|floor), msg: ("yass \(now|strflocaltime("%H:%M")) → " + f($to) + " · from " + f($from) + ([$u | keys[] | select(. != $to and . != $from) | " · " + f(.)] | join("")) + " (5h/7d)")}' "$D/usage.jsonl" > "$D/switched.json"
 ```
+`switched.json` is the status line every session shows its operator once (the PostToolUse hook), e.g. `yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)`.
 
 e. If a plan or a wind-down note was out, tell the main threads to carry on:
 ```bash
