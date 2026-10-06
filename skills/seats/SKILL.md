@@ -48,17 +48,16 @@ Then measure it: start the **seat-check** agent (Agent tool, `subagent_type: yas
 
 **4. Keys.** Ask whether they have long-lived keys (`claude setup-token`, valid a year, possibly from other people's accounts). For each key:
 - the owner runs `claude setup-token` **in a separate terminal**, signs in with that account in the browser, copies the printed token and tells you "copied";
-- you ask a short name, whose account it is and its plan (Pro, Max 5x, Max 20x; it sets the seat's weight in totals, `capacity` 1 / 5 / 20), then save it straight from the clipboard and clear the clipboard:
+- you save it straight from the clipboard as the next free `k<N>` and clear the clipboard. Ask nothing: no name, owner or plan. Say "saved as k<N>"; the owner can copy the next key right away. If they mention whose key it is or its plan, put that in `owner`/`plan`/`notes`.
 ```bash
-D=~/.yass; umask 077; S="$D/seats/<seat>"; mkdir -p "$S"
+D=~/.yass; umask 077; n=$(ls "$D/seats" | sed -n 's/^k\([0-9][0-9]*\)$/\1/p' | sort -n | tail -1); id="k$((${n:-0} + 1))"; S="$D/seats/$id"; mkdir -p "$S"
 pbpaste | tr -d '[:space:]' > "$S/token.tmp"; pbcopy < /dev/null
-if grep -Eq '^sk-ant-oat01-[A-Za-z0-9_-]{20,}$' "$S/token.tmp"; then jq -n -c --rawfile t "$S/token.tmp" '{claudeAiOauth: {accessToken: $t, refreshToken: null, expiresAt: ((now + 364*86400)*1000|floor), scopes: ["user:inference"], subscriptionType: null, rateLimitTier: null}}' > "$S/credentials.json" && echo saved; else echo "the clipboard did not hold a setup-token"; fi; rm -f "$S/token.tmp"
-for id in $(ls "$D/seats"); do [ "$id" != "<seat>" ] && [ "$(jq -r .claudeAiOauth.accessToken "$D/seats/$id/credentials.json" | shasum)" = "$(jq -r .claudeAiOauth.accessToken "$S/credentials.json" | shasum)" ] && echo "same key as $id"; done
-jq -n --arg id "<seat>" --arg label "<label>" --arg owner "<whose>" --arg plan "<plan>" --argjson cap <1|5|20> '{id: $id, kind: "key", label: $label, owner: $owner, plan: $plan, capacity: $cap, notes: "", added: (now|todate)}' > "$S/meta.json"
+grep -Eq '^sk-ant-oat01-[A-Za-z0-9_-]{20,}$' "$S/token.tmp" && jq -n -c --rawfile t "$S/token.tmp" '{claudeAiOauth: {accessToken: $t, refreshToken: null, expiresAt: ((now + 364*86400)*1000|floor), scopes: ["user:inference"], subscriptionType: null, rateLimitTier: null}}' > "$S/credentials.json"; rm -f "$S/token.tmp"
+h=$(jq -r .claudeAiOauth.accessToken "$S/credentials.json" 2>/dev/null | shasum); for o in $(ls "$D/seats"); do [ "$o" != "$id" ] && [ "$(jq -r .claudeAiOauth.accessToken "$D/seats/$o/credentials.json" | shasum)" = "$h" ] && { echo "same key as $o"; rm -f "$S/credentials.json"; }; done
+if [ -s "$S/credentials.json" ]; then jq -n --arg id "$id" '{id: $id, kind: "key", label: ("key " + $id), owner: "", plan: "", notes: "", added: (now|todate)}' > "$S/meta.json"; echo "saved $id"; else rmdir "$S"; echo "not saved: the clipboard did not hold a new setup-token"; fi
 ```
-- measure all seats with the seat-check agent (`Measure only.` measures the current seat; tell it `Seat check. Trigger: manual.` only after step 5).
 
-Keep asking for the next key until the owner says they're done ("done", «готово»).
+Keep taking keys until the owner says they're done ("done", «готово»). Then measure all seats with the seat-check agent (`Measure all.`): it also shows each key works. (`Seat check. Trigger: manual.` only after step 5.)
 
 **5. The rules, in the owner's words.** This is the heart of it. Show the default rules from `default-policy.md` (next to this file) as a short summary: balance across seats by what each used last period; keys never above 70% of 5h or 7d; on a key's last day before its weekly reset, the 7d cap rises to 90% if its owner isn't using it; logins capped at 90% to stay clear of paid extra usage; switch at cheap moments (after compaction, or when sessions are idle) unless a cap is near. Then ask the owner to tell you how they want their seats used: which to spend first, what to spare, special seats, hours. Write `~/.yass/policy.md` in their words (in English, first person, as they'd say it), starting from the default and changing what they changed. Read it back in a few lines and fix what they correct. Rules for a single seat can also go into that seat's `meta.json` `notes`.
 
@@ -87,7 +86,7 @@ jq -s -c 'group_by(.seat)[] | {seat: .[0].seat, last24h: [.[] | select(.t > (now
 Then work it out and answer in a few lines, in the owner's language:
   - per seat: 5h and 7d used against the caps its policy gives it (keys and logins differ; mind the last-day release), when each window resets (local time, "in 2 h"), how old the reading is (a window whose reset passed counts as 0%);
   - burn rate of the active seat: 5h-window points per hour over its last 1–2 hours of readings, 7d points per day over the last 24 hours; and when it reaches its cap at that rate;
-  - totals across all seats, weighted by `capacity` (a Max 20x seat holds four times what a Max 5x does; missing `capacity` counts 1): weekly used % = Σ(d7 × capacity) / Σ(100 × capacity); room left to the caps = Σ((cap7 − d7) × capacity), as a % of the total and as hours at the current burn; the same for the 5-hour windows right now;
+  - totals across all seats, each seat counting 100% (plans are not weighed: a key's plan is usually unknown), so four seats hold 400%: 7d left = Σ(100 − d7)% of N×100% (e.g. "290% of 400%"), room to the caps = Σ(cap7 − d7)%, and how many hours that is at the current burn; the same for the 5-hour windows right now;
   - the next resets, any planned switch (`pending.json`), the last switch.
 
   A short table plus 2–3 summary lines. Seats not measured for hours are shown as such; if the owner wants them fresh, start the seat-check agent with `Measure all.` (each probe opens an idle seat's 5-hour window, so say that first).

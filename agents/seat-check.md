@@ -31,7 +31,7 @@ Finish with one line: what you measured, what you decided, what you did.
 - `pending.json`: a planned switch waiting for subagents to wind down: `{id, target, reason, since, deadline, max_live_context, after?}` (epoch seconds). The SubagentStop hook starts it once the live subagents' context drops to `max_live_context` or the `deadline` passes; while it waits it is not run before `after`. `run/pending.taken` is the plan the hook just handed to you.
 - `notice.json`: `{id, text}`, a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
-- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (size relative to Pro: 1, 5, 20; weighs the seat in totals and balance), `notes` (the owner's rules for this seat).
+- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (optional, size relative to Pro: 1, 5, 20; informational, totals count every seat as 100%), `notes` (the owner's rules for this seat).
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
 - `usage.jsonl`: one reading per line, `{t, seat, src, status, overage, h5, h5_reset, d7, d7_reset}`: percent used of the 5-hour and 7-day windows, resets as epoch seconds.
 - `journal.md`: what happened, one line each.
