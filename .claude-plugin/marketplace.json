@@ -1,0 +1,14 @@
+{
+  "name": "yass",
+  "owner": {
+    "name": "Andrey Yunoshev"
+  },
+  "plugins": [
+    {
+      "name": "yass",
+      "source": "./",
+      "description": "Switch Claude Code between your subscription seats by usage limits, with a plain-text policy."
+    }
+  ],
+  "description": "yass: switch Claude Code between subscription seats by usage limits, by rules you state in plain words."
+}

@@ -1,0 +1,8 @@
+{
+  "name": "yass",
+  "version": "0.1.0",
+  "description": "Yet Another Seat Switcher: keeps Claude Code on whichever of your subscription seats has room: watches 5h/7d limits, lets a model decide by a plain-text policy, and swaps the login all sessions share.",
+  "author": { "name": "Andrey Yunoshev" },
+  "license": "MIT",
+  "keywords": ["accounts", "rate-limits", "usage", "keychain", "mod"]
+}

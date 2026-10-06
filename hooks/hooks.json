@@ -1,0 +1,36 @@
+{
+  "description": "yass: three one-line shell hooks, no scripts. After a compaction, and at most every check_every_min minutes of tool activity (the pulse), they start the seat-check agent in the background (claude -p). While a switch waits for subagents to wind down, PostToolUse hands the main thread a one-time note, and SubagentStop starts the switch once little subagent context is alive or the deadline passed. Each exits in milliseconds when there is nothing to do; all do nothing until onboarding wrote ~/.yass/policy.md, in sessions that use a token from the environment, or inside a check.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D=\"$HOME/.yass\"; [ -z \"$YASS_CHILD\" ] && [ -z \"$CLAUDE_CODE_OAUTH_TOKEN\" ] && [ -f \"$D/policy.md\" ] && [ \"$(jq -r .auto \"$D/config.json\" 2>/dev/null)\" != false ] || exit 0; L() { (cd \"$D\" && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID YASS_CHILD=1 nohup \"${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}\" -p \"$1\" --agent yass:seat-check --model \"$(jq -r '.model // \"sonnet\"' \"$D/config.json\")\" --allowedTools=Bash,Read,Write,Edit --no-session-persistence >> \"$D/check.log\" 2>&1 &); }; [ -z \"$(find \"$D/last-check\" -mmin -10 2>/dev/null)\" ] || exit 0; touch \"$D/last-check\"; L 'Seat check. Trigger: compact.'; exit 0"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D=\"$HOME/.yass\"; [ -z \"$YASS_CHILD\" ] && [ -z \"$CLAUDE_CODE_OAUTH_TOKEN\" ] && [ -f \"$D/policy.md\" ] && [ \"$(jq -r .auto \"$D/config.json\" 2>/dev/null)\" != false ] || exit 0; L() { (cd \"$D\" && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID YASS_CHILD=1 nohup \"${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}\" -p \"$1\" --agent yass:seat-check --model \"$(jq -r '.model // \"sonnet\"' \"$D/config.json\")\" --allowedTools=Bash,Read,Write,Edit --no-session-persistence >> \"$D/check.log\" 2>&1 &); }; I=$(cat); if [ -z \"$(find \"$D/last-check\" -mmin -\"$(jq -r '.check_every_min // 30' \"$D/config.json\")\" 2>/dev/null)\" ]; then touch \"$D/last-check\"; L 'Seat check. Trigger: pulse.'; fi; [ -n \"$(find \"$D/notice.json\" -mmin -30 2>/dev/null)\" ] && [ -z \"$(printf %s \"$I\" | jq -r '.agent_id // empty')\" ] || exit 0; K=\"$D/run/noted-$(printf %s \"$I\" | jq -r .session_id)-$(jq -r .id \"$D/notice.json\")\"; [ -f \"$K\" ] && exit 0; mkdir -p \"$D/run\"; touch \"$K\"; jq -c '{hookSpecificOutput: {hookEventName: \"PostToolUse\", additionalContext: .text}}' \"$D/notice.json\"; exit 0"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D=\"$HOME/.yass\"; [ -z \"$YASS_CHILD\" ] && [ -z \"$CLAUDE_CODE_OAUTH_TOKEN\" ] && [ -f \"$D/policy.md\" ] && [ \"$(jq -r .auto \"$D/config.json\" 2>/dev/null)\" != false ] || exit 0; L() { (cd \"$D\" && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID YASS_CHILD=1 nohup \"${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}\" -p \"$1\" --agent yass:seat-check --model \"$(jq -r '.model // \"sonnet\"' \"$D/config.json\")\" --allowedTools=Bash,Read,Write,Edit --no-session-persistence >> \"$D/check.log\" 2>&1 &); }; [ -f \"$D/pending.json\" ] || exit 0; A=$(jq -r '.agent_id // empty'); A=${A:-none}; [ \"$(date +%s)\" -ge \"$(jq -r '.after // 0' \"$D/pending.json\")\" ] || exit 0; LIVE=$(find \"$HOME/.claude/projects\" -path '*/subagents/*' -name '*.jsonl' -mmin -2 ! -name \"*$A*\" 2>/dev/null | while read -r f; do tail -n 40 \"$f\" | jq -s '[.[] | .message.usage? // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | last // 0'; done | awk '{s+=$1} END {print s+0}'); [ \"$LIVE\" -le \"$(jq -r '.max_live_context // 150000' \"$D/pending.json\")\" ] || [ \"$(date +%s)\" -ge \"$(jq -r '.deadline // 0' \"$D/pending.json\")\" ] || exit 0; mkdir -p \"$D/run\"; mv \"$D/pending.json\" \"$D/run/pending.taken\" 2>/dev/null || exit 0; L \"Switch to $(jq -r .target \"$D/run/pending.taken\"). Reason: $(jq -r .reason \"$D/run/pending.taken\"). Planned switch; live subagent context now $LIVE tokens.\"; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
