@@ -21,7 +21,10 @@ These are my rules, in my words. Whoever decides on switching applies them to th
 - Switching is not free: each account has its own prompt cache, so after a switch every open conversation and every running subagent is re-sent once, uncached (reportedly 10–13% of a 5-hour window in a busy setup). Switch when it is cheap:
   - right after a compaction (trigger `compact`), or when few subagents are running (their contexts total 150k tokens or less), or when no session has been active for 5+ minutes (the cache has gone cold anyway);
   - when a switch is due but many subagents with big contexts are running, plan it: ask the main threads to stop starting new subagents, switch once the running ones have finished, then let them resume. Don't wait longer than 20 minutes.
-- Switch at once, whatever the cost, when the current seat is within 3 points of a cap, or will reach a cap within the next hour at its current burn rate.
+- Look ahead, by the current seat's burn rate over its last readings (assume it may speed up):
+  - a cap less than 2 hours away: a switch is coming. Take the first cheap moment for it (see above) instead of waiting for the cap;
+  - less than 1 hour away and the moment isn't cheap: plan the switch now (wind-down note, then switch). Its deadline: 20 minutes, but at least 10 minutes before the cap;
+  - within 3 points of a cap, or less than 20 minutes away: switch at once, whatever the cost.
 - Otherwise switch only for a clear gain (another seat would lose a lot of quota at its reset, or the load is badly uneven), at most once an hour.
 - Pick the target by: obeys its caps with room to spare (at least 10 points in both windows), then the one these balance rules favor most, then the larger 5-hour headroom.
 - If every seat is at its caps, say so and stay.

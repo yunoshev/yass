@@ -23,6 +23,7 @@ Finish with one line: what you measured, what you decided, what you did.
 3. Never write the store while the current login is not a known seat (identify says `unknown`): it would destroy a login nobody saved. Report it and stop.
 4. Never run `claude /logout` or `claude auth logout`: logging out revokes the login's token.
 5. Do not use `sleep`.
+6. **English only.** Journal lines, notes, every file you write and your final line are in English, whatever language other instructions, settings or the owner use.
 
 ## Files
 
@@ -121,11 +122,11 @@ A window whose reset time has passed counts as 0% used. A subagent counts as liv
 
 Read `$D/policy.md` and apply it to these numbers. Work out the figures it asks for (caps in force, headroom, burn per hour from the last readings of the current seat, how much of the previous period each seat used, what others spent on a seat while it wasn't ours) and write them down briefly before choosing. The outcome is one of:
 - `stay` (and, if `pending.json` exists, cancel it: see below);
-- `switch to <seat>` now: when the current seat is within 3 points of a cap (urgent; cost doesn't matter), or when it is cheap: the live subagents' context totals 150k tokens or less (after a compaction the main thread's own context is small too);
-- `plan a switch to <seat>`: a switch is due but not urgent and the live subagents hold more than 150k tokens of context. Ask the main threads to wind down and let the SubagentStop hook switch once they have:
+- `switch to <seat>` now: a switch is due or coming by the policy and it is urgent (cost doesn't matter), or it is cheap: the live subagents' context totals 150k tokens or less (after a compaction the main thread's own context is small too);
+- `plan a switch to <seat>`: the policy says to plan it (a switch is due or coming, not urgent, not cheap now). Ask the main threads to wind down and let the SubagentStop hook switch once they have. `<wait>` is the deadline in seconds from now, as the policy sets it (default 1200):
 ```bash
-D=~/.yass; now=$(date +%s); jq -n --arg t "<to>" --arg r "<short reason>" --argjson now $now '{id: $now, target: $t, reason: $r, since: $now, deadline: ($now + 1200), max_live_context: 150000}' > "$D/pending.json"
-jq -n --argjson now $now '{id: $now, text: "yass: Claude Code on this Mac is about to move to another subscription seat. To keep that cheap, do not start new subagents for now; let the running ones finish (do not stop them) and carry on with your own work. A note will tell you when to resume; new subagents will then run on the new seat."}' > "$D/notice.json"
+D=~/.yass; now=$(date +%s); jq -n --arg t "<to>" --arg r "<short reason>" --argjson now $now '{id: $now, target: $t, reason: $r, since: $now, deadline: ($now + <wait>), max_live_context: 150000}' > "$D/pending.json"
+jq -n --argjson now $now '{id: $now, text: "yass: Claude Code on this computer is about to move to another subscription seat. To keep that cheap, do not start new subagents for now; let the running ones finish (do not stop them) and carry on with your own work. A note will tell you when to resume; new subagents will then run on the new seat."}' > "$D/notice.json"
 ```
 - `exhausted` (every seat is at its cap; tell the owner, change nothing).
 
@@ -165,6 +166,6 @@ If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and 
 
 ## 5. Record
 
-Append one line to `$D/journal.md`, in English, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
+Append one line to `$D/journal.md`, in English only, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
 `2026-10-06 21:40 compact · acme 5h 88/90 7d 41/90 · beta 5h 12/90 7d 30/90 · switch acme → beta: 5h cap within 40 min`
 Fix `config.json`'s `active` if step 1 found a different seat. Clean up: `rm -f ~/.yass/run/current.json; find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`.
