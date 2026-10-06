@@ -82,12 +82,14 @@ jq -s -c 'group_by(.seat) | map(max_by(.t)) | .[] | {seat, h5, d7, h5_reset: (.h
 D=~/.yass; id=$(jq -r .active "$D/config.json"); env -u CLAUDE_CODE_OAUTH_TOKEN YASS_CHILD=1 "${CLAUDE_CODE_EXECPATH:-claude}" -p ok --model haiku --setting-sources "" --tools "" --strict-mcp-config --no-session-persistence --system-prompt "Reply with exactly: ok" --output-format json | jq -c --arg seat "$id" '([(if type=="array" then .[] else . end) | select(.type=="rate_limit_event") | .rate_limit_info] | first) // empty | {t: (now|floor), seat: $seat, src: "probe", status, overage: .overageStatus, h5: ((.unifiedWindows.five_hour.utilization // 0)*100|round), h5_reset: .unifiedWindows.five_hour.resetsAt, d7: ((.unifiedWindows.seven_day.utilization // 0)*100|round), d7_reset: .unifiedWindows.seven_day.resetsAt}' >> "$D/usage.jsonl"
 date '+now %s %a %H:%M'; cat "$D/config.json" "$D/policy.md"; cat "$D/pending.json" 2>/dev/null; for s in $(ls "$D/seats"); do jq -c '{id, kind, label, plan, capacity, notes}' "$D/seats/$s/meta.json"; done
 jq -s -c 'group_by(.seat)[] | {seat: .[0].seat, last24h: [.[] | select(.t > (now - 86400)) | [.t, .h5, .h5_reset, .d7, .d7_reset]]}' "$D/usage.jsonl"
+jq -s -c '{switches: length, last7d: [.[] | select(.t > (now - 7*86400))] | {n: length, tokens: (map(.total_tokens // 0) | add // 0)}, recent: (.[-5:] | map({at: (.t|strflocaltime("%a %H:%M")), from, to, planned, main_tokens, subagent_tokens}))}' "$D/switches.jsonl" 2>/dev/null
 ```
 Then work it out and answer in a few lines, in the owner's language:
   - per seat: 5h and 7d used against the caps its policy gives it (keys and logins differ; mind the last-day release), when each window resets (local time, "in 2 h"), how old the reading is (a window whose reset passed counts as 0%);
   - burn rate of the active seat: 5h-window points per hour over its last 1–2 hours of readings, 7d points per day over the last 24 hours; and when it reaches its cap at that rate;
   - totals across all seats, each seat counting 100% (plans are not weighed: a key's plan is usually unknown), so four seats hold 400%: 7d left = Σ(100 − d7)% of N×100% (e.g. "290% of 400%"), room to the caps = Σ(cap7 − d7)%, and how many hours that is at the current burn; the same for the 5-hour windows right now;
-  - the next resets, any planned switch (`pending.json`), the last switch.
+  - the next resets, any planned switch (`pending.json`), the last switch;
+  - what switching cost (`switches.jsonl`): switches over the last 7 days and the context tokens they re-sent uncached (main sessions vs subagents), so the owner sees what the moves lose.
 
   A short table plus 2–3 summary lines. Seats not measured for hours are shown as such; if the owner wants them fresh, start the seat-check agent with `Measure all.` (each probe opens an idle seat's 5-hour window, so say that first).
 - **Check now** / **switch to a seat**: start the seat-check agent with `Seat check. Trigger: manual.` or `Switch to <seat>. Reason: <owner's words>.` Use the model from `config.json`.

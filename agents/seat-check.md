@@ -37,23 +37,16 @@ Finish with one line: what you measured, what you decided, what you did.
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
 - `usage.jsonl`: one reading per line, `{t, seat, src, status, overage, h5, h5_reset, d7, d7_reset}`: percent used of the 5-hour and 7-day windows, resets as epoch seconds.
 - `journal.md`: what happened, one line each.
-- `run/current.json` (secret): the copy of the store R1 makes; deleted at the end of every run.
+- `switches.jsonl`: one line per switch with what it cost: `{t, from, to, trigger, planned, main_sessions, main_tokens, subagents, subagent_tokens, total_tokens}` (context tokens re-sent uncached to the new seat).
 
 ## Platform: the store
 
 Only two recipes touch the store; everything else works on files. Unknown platform → say so and stop.
 
-**R1, read the store** into `run/current.json`:
+**R1, read the store.** This line defines `store`, which prints the store's JSON. Use it only inside `$( )` or redirected into a seat's file, never to the screen; every block below that reads the store starts with it:
 ```bash
-D=~/.yass; umask 077; mkdir -p "$D/run"; rm -f "$D/run/current.json"; F="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
-case "$(uname -s)" in
-  Darwin) security find-generic-password -s "Claude Code-credentials" -w > "$D/run/current.json" 2>/dev/null ;;
-  Linux) cp "$F" "$D/run/current.json" 2>/dev/null ;;
-  *) echo "unsupported platform: $(uname -s)" ;;
-esac
-jq -e '.claudeAiOauth.accessToken | length > 0' "$D/run/current.json" >/dev/null 2>&1 && echo "store read" || echo "store unreadable"
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
 ```
-`store unreadable` → report it and change nothing.
 
 **R2, write seat `<to>` into the store** (the macOS value goes in hex over stdin, never in a process's arguments; the Linux file is replaced atomically):
 ```bash
@@ -64,7 +57,11 @@ case "$(uname -s)" in
   Linux) (umask 077; cp "$T" "$F.yass" && mv "$F.yass" "$F") ;;
 esac
 ```
-Then R1 again and check: `[ "$(jq -r .claudeAiOauth.accessToken ~/.yass/run/current.json)" = "$(jq -r .claudeAiOauth.accessToken ~/.yass/seats/<to>/credentials.json)" ] && echo verified || echo FAILED`.
+Then check:
+```bash
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+[ "$(store | jq -r .claudeAiOauth.accessToken)" = "$(jq -r .claudeAiOauth.accessToken ~/.yass/seats/<to>/credentials.json)" ] && echo verified || echo FAILED
+```
 
 **Notify** (optional desktop notification):
 ```bash
@@ -73,18 +70,19 @@ case "$(uname -s)" in Darwin) osascript -e 'display notification "<from> → <to
 
 ## 1. Identify the seat in the store
 
-Run R1, then:
 ```bash
-D=~/.yass; C="$D/run/current.json"; t() { jq -r ".claudeAiOauth.$1 // empty" "$2" 2>/dev/null; }
-ca=$(t accessToken "$C"); cr=$(t refreshToken "$C")
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+D=~/.yass; K=$(store); printf %s "$K" | jq -e '.claudeAiOauth.accessToken | length > 0' >/dev/null 2>&1 || echo "store unreadable"
+t() { jq -r ".claudeAiOauth.$1 // empty" 2>/dev/null; }; ca=$(printf %s "$K" | t accessToken); cr=$(printf %s "$K" | t refreshToken)
 uuid=$(jq -r '.oauthAccount.accountUuid // empty' ~/.claude.json); org=$(jq -r '.oauthAccount.organizationUuid // empty' ~/.claude.json)
 for id in $(ls "$D/seats"); do f="$D/seats/$id/credentials.json"; m=no
-  [ -n "$ca" ] && [ "$(t accessToken "$f")" = "$ca" ] && m=exact
-  [ "$m" = no ] && [ -n "$cr" ] && [ "$(t refreshToken "$f")" = "$cr" ] && m=exact
+  [ -n "$ca" ] && [ "$(t accessToken < "$f")" = "$ca" ] && m=exact
+  [ "$m" = no ] && [ -n "$cr" ] && [ "$(t refreshToken < "$f")" = "$cr" ] && m=exact
   [ "$m" = no ] && [ -n "$cr" ] && [ -n "$uuid" ] && [ -n "$org" ] && [ "$(jq -r '[.accountUuid, .organizationUuid] | join(" ")' "$D/seats/$id/account.json" 2>/dev/null)" = "$uuid $org" ] && m=rotated
   echo "$id $m"; done
-jq -r '"store expires in min: \(((.claudeAiOauth.expiresAt // 0)/1000 - now)/60 | floor)"' "$C"
+printf %s "$K" | jq -r '"store expires in min: \(((.claudeAiOauth.expiresAt // 0)/1000 - now)/60 | floor)"'
 ```
+`store unreadable` → report it and change nothing.
 
 `exact` or `rotated` (a login renewed its tokens since it was saved; normal) names the current seat. `rotated` compares the pair `accountUuid` + `organizationUuid`, never the account alone: one person can belong to several organizations, each its own seat with the same `accountUuid`. `exact` beats `rotated`. Several `exact`, or no `exact` and several `rotated` → `unknown` (name the seats). No match = `unknown`. If `config.json`'s `active` differs from what you found, fix it (step 5).
 
@@ -137,13 +135,24 @@ D=~/.yass; rm -f "$D/pending.json"; jq -n --argjson now $(date +%s) '{id: $now, 
 
 ## 4. Switch from `<from>` to `<to>`
 
-a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap; journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair). Run R1 again (a probe may have renewed the token since step 1), then:
+a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap; journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
 ```bash
-D=~/.yass; S="$D/seats/<from>"; jq -e '.claudeAiOauth.refreshToken | length > 0' "$D/run/current.json" >/dev/null 2>&1 && (umask 077; cp "$S/credentials.json" "$S/credentials.prev.json" && cp "$D/run/current.json" "$S/credentials.json") && echo saved || echo "NOT SAVED"
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+D=~/.yass; S="$D/seats/<from>"; (umask 077; store > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
 ```
 If it says `NOT SAVED`, stop.
 
-b. Put `<to>` into the store: R2, then R1 and its check.
+Then note what the switch will cost: the context every warm session and live subagent re-sends uncached to the new seat (main sessions active within the last hour, subagents within 2 minutes):
+```bash
+D=~/.yass; c() { tail -n 40 "$1" | jq -s '[.[] | .message.usage? // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | last // 0' 2>/dev/null || echo 0; }
+mn=0; mt=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { mn=$((mn+1)); mt=$((mt+n)); }; done < <(find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -mmin -60 2>/dev/null)
+sn=0; st=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { sn=$((sn+1)); st=$((st+n)); }; done < <(find ~/.claude/projects -path '*/subagents/*' -name '*.jsonl' -mmin -2 2>/dev/null)
+echo "cost: main $mn sessions $mt tokens, subagents $sn $st tokens"
+jq -n -c --arg f "<from>" --arg to "<to>" --arg tr "<trigger>" --argjson pl <true|false> --argjson mn $mn --argjson mt $mt --argjson sn $sn --argjson st $st '{t: (now|floor), from: $f, to: $to, trigger: $tr, planned: $pl, main_sessions: $mn, main_tokens: $mt, subagents: $sn, subagent_tokens: $st, total_tokens: ($mt + $st)}' >> "$D/switches.jsonl"
+```
+`planned` is true when this run carries out a planned switch. Put the cost in the journal line.
+
+b. Put `<to>` into the store: R2 and its check.
 
 c. **Only if `<to>` is a `login` seat:** show its account in `/status`:
 ```bash
@@ -168,4 +177,4 @@ If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and 
 
 Append one line to `$D/journal.md`, in English only, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
 `2026-10-06 21:40 compact · acme 5h 88/90 7d 41/90 · beta 5h 12/90 7d 30/90 · switch acme → beta: 5h cap within 40 min`
-Fix `config.json`'s `active` if step 1 found a different seat. Clean up: `rm -f ~/.yass/run/current.json; find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`.
+Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`.
