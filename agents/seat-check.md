@@ -31,7 +31,7 @@ Finish with one line: what you measured, what you decided, what you did.
 - `config.json`: `model` (for checks), `auto` (false = hooks do nothing), `check_every_min` (the pulse: at most one check per this many minutes of activity), `active` (seat in the store), `last_switch` (epoch seconds).
 - `pending.json`: a planned switch waiting for subagents to wind down: `{id, target, reason, since, deadline, max_live_context, after?}` (epoch seconds). The SubagentStop hook starts it once the live subagents' context drops to `max_live_context` or the `deadline` passes; while it waits it is not run before `after`. `run/pending.taken` is the plan the hook just handed to you.
 - `notice.json`: `{id, text}`, a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it).
-- `switched.json`: `{id, msg}`, the one-line status after a switch that every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`).
+- `switched.json`: `{id, msg}`, a one-line message every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`): the status after a switch, a seat added on its own (1a), or a pause (1b).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
 - `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (optional, size relative to Pro: 1, 5, 20; informational, totals count every seat as 100%), `notes` (the owner's rules for this seat).
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
@@ -82,9 +82,26 @@ for id in $(ls "$D/seats"); do f="$D/seats/$id/credentials.json"; m=no
   echo "$id $m"; done
 printf %s "$K" | jq -r '"store expires in min: \(((.claudeAiOauth.expiresAt // 0)/1000 - now)/60 | floor)"'
 ```
-`store unreadable` → report it and change nothing.
+`store unreadable` → 1b.
 
 `exact` or `rotated` (a login renewed its tokens since it was saved; normal) names the current seat. `rotated` compares the pair `accountUuid` + `organizationUuid`, never the account alone: one person can belong to several organizations, each its own seat with the same `accountUuid`. `exact` beats `rotated`. Several `exact`, or no `exact` and several `rotated` → `unknown` (name the seats). No match = `unknown`. If `config.json`'s `active` differs from what you found, fix it (step 5).
+
+**1a. A new login.** No seat matched at all, and the store holds a login (it has a refresh token: the owner ran `/login` with an account yass doesn't know yet). Save it as a new seat yourself, then carry on with it as the current seat. Never touch the store here. The name comes from the organization, or from the email for a personal organization:
+```bash
+D=~/.yass; n=$(jq -r '.oauthAccount | (.organizationName // "") as $o | (if $o == "" or ($o | test("s Organization$")) then ((.emailAddress // "") | split("@") | .[0] // "login") else $o end) | ascii_downcase | gsub("[^a-z0-9]"; "")' ~/.claude.json | cut -c1-20); n=${n:-login}; id=$n; i=2; while [ -e "$D/seats/$id" ]; do id="$n$i"; i=$((i+1)); done; echo "new seat: $id"
+```
+```bash
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+D=~/.yass; S="$D/seats/<new>"; mkdir -p "$S" && (umask 077; store > "$S/credentials.json") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.json" >/dev/null 2>&1 && jq '.oauthAccount' ~/.claude.json > "$S/account.json" && echo saved || { rm -f "$S/credentials.json" "$S/account.json"; rmdir "$S" 2>/dev/null; echo "NOT SAVED"; }
+[ -s "$S/credentials.json" ] && jq -n --arg id "<new>" --slurpfile a "$S/account.json" '$a[0] as $a | {id: $id, kind: "login", label: "\($a.organizationName // "?") (\($a.emailAddress // "?"))", plan: "", capacity: (($a.userRateLimitTier // "") as $t | if ($t|test("20x")) then 20 elif ($t|test("5x")) then 5 else 1 end), owner: "me", notes: "added automatically: found in the store after a /login", added: (now|todate)}' > "$S/meta.json" && jq -n -c --arg m "yass: new login <organization> saved as seat <new>; it now takes part in switching by your rules" '{id: (now|floor), msg: $m}' > "$D/switched.json"
+```
+`NOT SAVED` → treat it as 1b.
+
+**1b. Pause.** Still `unknown` (several seats match, the store holds a key no seat has, the store is unreadable, or 1a failed): change nothing, and tell the operator, at most once in 2 hours for the same reason:
+```bash
+D=~/.yass; m="yass paused: <short reason>; say /yass:seats to fix it"; { [ "$(jq -r .msg "$D/switched.json" 2>/dev/null)" = "$m" ] && [ -n "$(find "$D/switched.json" -mmin -120 2>/dev/null)" ]; } || jq -n -c --arg m "$m" '{id: (now|floor), msg: $m}' > "$D/switched.json"
+```
+Then go to step 5.
 
 ## 2. Measure
 

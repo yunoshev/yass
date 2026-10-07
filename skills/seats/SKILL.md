@@ -44,7 +44,7 @@ case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-cre
 
 Then measure it: start the **seat-check** agent (Agent tool, `subagent_type: yass:seat-check`) with `Measure only.` and report its line.
 
-**3. More logins.** Ask whether the owner has another account to add. If so: "Type `/login` and sign in with the next account. Don't use `/logout`." When they're back, run `claude auth status`; if the account or organization changed, repeat step 2 for it. Repeat until there are no more logins.
+**3. More logins.** Ask whether the owner has another account to add. If so: "Type `/login` and sign in with the next account. Don't use `/logout`." When they're back, run `claude auth status`; if the account or organization changed, repeat step 2 for it. Repeat until there are no more logins. (If a new login is not saved here, the next check saves it as a seat on its own and says so in every session; saving it right away is still better, so a switch can be planned in time.)
 
 **4. Keys.** Ask whether they have long-lived keys (`claude setup-token`, valid a year, possibly from other people's accounts). For each key:
 - the owner runs `claude setup-token` **in a separate terminal**, signs in with that account in the browser, copies the printed token and tells you "copied". On Linux without a desktop clipboard (a server, SSH), they instead run in that terminal `(umask 077; read -rs T; printf %s "$T" > ~/.yass/inbox.token)`, paste the token, press Enter (nothing is shown) and tell you;
@@ -95,5 +95,5 @@ Then work it out and answer in a few lines, in the owner's language:
 - **Check now** / **switch to a seat**: start the seat-check agent with `Seat check. Trigger: manual.` or `Switch to <seat>. Reason: <owner's words>.` Use the model from `config.json`.
 - **Pause / resume** automatic checks: set `.auto` to `false` / `true` in `config.json` (the hooks read it). **How often** to check while working: `.check_every_min`.
 - **Change the rules**: edit `policy.md` with the owner's words, read the change back.
-- **Add** a seat: onboarding steps 2–4. **Remove** one (never the active one): `mv "$D/seats/<seat>" "$D/removed-<seat>-$(date +%s)"`.
+- **Add** a seat: onboarding steps 2–4. A `/login` with a new account is enough too: the next check adopts it as a seat (named after its organization) and tells every session. **Remove** one (never the active one): `mv "$D/seats/<seat>" "$D/removed-<seat>-$(date +%s)"`.
 - **Something broke** (the store holds a login no seat knows, a switch failed): `/login` with any saved account restores a working login; then save it again (step 2).
