@@ -30,7 +30,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 `D=~/.yass`:
 - `config.json`: `model` (for checks), `auto` (false = hooks do nothing), `check_every_min` (the pulse: at most one check per this many minutes of activity), `active` (seat in the store), `last_switch` (epoch seconds).
 - `pending.json`: a planned switch waiting for subagents to wind down: `{id, target, reason, since, deadline, max_live_context, after?}` (epoch seconds). The SubagentStop hook starts it once the live subagents' context drops to `max_live_context` or the `deadline` passes; while it waits it is not run before `after`. `run/pending.taken` is the plan the hook just handed to you.
-- `notice.json`: `{id, text}`, a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it).
+- `notice.json`: a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it with the next tool result; the Stop hook wakes a session that went idle during a wind-down and hands it the all-clear). `{id, wait_until, text}` asks to hold back new subagents (its `id` is the plan's `id`); `{id, plan, resume: true, text}` is the all-clear. The hooks write the all-clear themselves the moment they take a plan.
 - `switched.json`: `{id, msg}`, a one-line message every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`): the status after a switch, a seat added on its own (1a), or a pause (1b).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
 - `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (optional, size relative to Pro: 1, 5, 20; informational, totals count every seat as 100%), `notes` (the owner's rules for this seat).
@@ -156,18 +156,22 @@ Read `$D/policy.md` and apply it to these numbers. Work out the figures it asks 
 - `plan a switch to <seat>`: the policy says to plan it (a switch is due or coming, not urgent, not cheap now). Winding down only shrinks the subagents' share; the main sessions stay warm while the owner works. Ask the main threads to wind down and let the SubagentStop hook switch once they have. `<wait>` is the deadline in seconds from now, as the policy sets it (default 1200):
 ```bash
 D=~/.yass; now=$(date +%s); jq -n --arg t "<to>" --arg r "<short reason>" --argjson now $now '{id: $now, target: $t, reason: $r, since: $now, deadline: ($now + <wait>), max_live_context: 150000}' > "$D/pending.json"
-jq -n --argjson now $now '{id: $now, text: "yass: Claude Code on this computer is about to move to another subscription seat. To keep that cheap, do not start new subagents for now; let the running ones finish (do not stop them) and carry on with your own work. A note will tell you when to resume; new subagents will then run on the new seat."}' > "$D/notice.json"
+jq -n -c --argjson now $now --argjson w $((now + <wait>)) '{id: $now, wait_until: $w, text: "yass: Claude Code on this computer will move to another subscription seat by \($w | strflocaltime("%H:%M")). Until then, prefer not to start new subagents: each running one is re-sent once to the new seat. Never stop or end your turn to wait for this: carry on with your own work, and if only subagent work is left, start it. A note will say when the move is done."}' > "$D/notice.json"
 ```
 - `exhausted` (every seat is at its cap; tell the owner, change nothing).
 
-If `pending.json` already exists: its deadline passed → switch to its target now (`mv "$D/pending.json" "$D/run/pending.taken"` first); still needed → leave it; no longer needed → cancel it:
+If `pending.json` already exists: its deadline passed → take it and send the all-clear, then switch to its target now:
 ```bash
-D=~/.yass; rm -f "$D/pending.json"; jq -n --argjson now $(date +%s) '{id: $now, text: "yass: the seat switch is off. Resume as usual; starting subagents is fine."}' > "$D/notice.json"
+D=~/.yass; mv "$D/pending.json" "$D/run/pending.taken" && jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/run/pending.taken")" '{id: $now, plan: $p, resume: true, text: "yass: the seat switch is starting now. If you were holding back subagents, start them; otherwise carry on as before."}' > "$D/notice.json"
+```
+Still needed → leave it. No longer needed → cancel it:
+```bash
+D=~/.yass; jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/pending.json")" '{id: $now, plan: $p, resume: true, text: "yass: the seat switch is off. If you were holding back subagents, start them; otherwise carry on as before."}' > "$D/notice.json" && rm -f "$D/pending.json"
 ```
 
 ## 4. Switch from `<from>` to `<to>`
 
-First run step 1's identify block again (the second block there, not the lock): go on only if it still names `<from>` as the current seat. Otherwise the login changed since step 1 (a `/login`): journal it and go to step 5.
+First run step 1's identify block again (the second block there, not the lock): go on only if it still names `<from>` as the current seat. Otherwise the login changed since step 1 (a `/login`): journal it and go to step 5. If `<to>` is the current seat already, there is nothing to switch: `rm -f ~/.yass/run/pending.taken` and go to step 5.
 
 a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap; journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
 ```bash
@@ -196,9 +200,9 @@ jq -s -c --arg to "<to>" --arg from "<from>" 'group_by(.seat) | map(max_by(.t)) 
 ```
 `switched.json` is the status line every session shows its operator once (the PostToolUse hook), e.g. `yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)`.
 
-e. If a plan or a wind-down note was out, tell the main threads to carry on:
+e. If a wind-down note is still out (no all-clear yet), send it; then clear the plan:
 ```bash
-D=~/.yass; rm -f "$D/pending.json" "$D/run/pending.taken"; [ -f "$D/notice.json" ] && jq -n --argjson now $(date +%s) '{id: $now, text: "yass: moved to the new seat. Resume as usual; starting subagents is fine."}' > "$D/notice.json"
+D=~/.yass; [ -n "$(jq -r '.wait_until // empty' "$D/notice.json" 2>/dev/null)" ] && jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/notice.json")" '{id: $now, plan: $p, resume: true, text: "yass: moved to the new seat. If you were holding back subagents, start them; otherwise carry on as before."}' > "$D/notice.json"; rm -f "$D/pending.json" "$D/run/pending.taken"
 ```
 
 If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and journal the failure.

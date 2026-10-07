@@ -2,7 +2,7 @@
 
 ## NO SCRIPTS. PURE PROMPTS. YOUR RULES, IN YOUR OWN WORDS.
 
-- **No code to run.** No daemon, no proxy, no wrapper, no binary: a skill, an agent prompt, three one-line hooks. A model reads your rules and does the switching itself, with the shell commands written in its prompt.
+- **No code to run.** No daemon, no proxy, no wrapper, no binary: a skill, an agent prompt, four one-line hooks. A model reads your rules and does the switching itself, with the shell commands written in its prompt.
 - **You just say how.** "Logins first, keys only as a reserve", "keep 30% of Bob's key for him": you tell Claude, it goes into `~/.yass/policy.md` in your words, and that file is what decides. To change a rule, say so.
 - **Logins and long-lived tokens.** Besides `/login` accounts, yass takes the long-lived tokens that `claude setup-token` generates, ["a one-year OAuth token"](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token) in Claude Code's docs, so a subscription shared with you as a token is one more seat. Copy the token, say "copied", done: it becomes `k1`, `k2`, …
 
@@ -31,9 +31,9 @@ and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10
   - logins stop at 90%, before paid extra usage;
   - switch at cheap moments.
 - **Cheap moments.** The prompt cache is per account, so every conversation used in the last hour and every running subagent is re-sent once after a switch. yass measures that cost in tokens before deciding, logs it for each switch (`switches.jsonl`), and switches early only when it is small. If many big subagents are running, the switch waits for them:
-  1. the main thread gets a one-time note not to start new subagents;
+  1. the main thread gets a one-time note to hold back new subagents until a set time (never to stop working);
   2. the switch happens as soon as the running ones finish (20 minutes at most);
-  3. a second note tells it to resume.
+  3. a second note tells it to go on; a session that went idle meanwhile is woken with it (a `Stop` hook with `asyncRewake`).
 
   Near a cap, it switches at once.
 
@@ -82,7 +82,7 @@ Requirements:
 | `skills/seats/SKILL.md` | onboarding and everyday requests: status, switch, pause, rules |
 | `skills/seats/default-policy.md` | the default rules onboarding starts from |
 | `agents/seat-check.md` | the background checker: measure, decide, switch |
-| `hooks/hooks.json` | three one-line hooks: compaction and the activity pulse start the checker; `PostToolUse` shows each session a one-line status after a switch and delivers the wind-down/resume notes to the main thread; `SubagentStop` starts a planned switch once subagents have wound down |
+| `hooks/hooks.json` | four one-line hooks: compaction and the activity pulse start the checker; `PostToolUse` shows each session a one-line status after a switch, delivers the wind-down/resume notes to the main thread and starts a planned switch whose deadline passed; `SubagentStop` starts a planned switch once subagents have wound down; `Stop` wakes a session that went idle during a wind-down when the switch is under way |
 | `~/.yass/` | your seats, `policy.md`, `usage.jsonl`, `journal.md` |
 
 ## License
