@@ -39,6 +39,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 - `journal.md`: what happened, one line each.
 - `switches.jsonl`: one line per switch with what it cost: `{t, from, to, trigger, planned, main_sessions, main_tokens, subagents, subagent_tokens, total_tokens}` (context tokens re-sent uncached to the new seat).
 - `last-check`: its time is when the last check started; the hooks start no new one soon after it.
+- `next-check`: epoch seconds; the PostToolUse hook starts a check at that time even if the pulse isn't due yet (step 5).
 - `run/check.lock`: a directory that exists while a check runs; one check at a time.
 
 ## Platform: the store
@@ -211,4 +212,4 @@ If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and 
 
 Append one line to `$D/journal.md`, in English only, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
 `2026-10-06 21:40 compact · acme 5h 88/90 7d 41/90 · beta 5h 12/90 7d 30/90 · switch acme → beta: 5h cap within 40 min`
-Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`. Last, release the lock: `rmdir ~/.yass/run/check.lock`.
+Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`. Then the next look: if something that matters may happen before the next pulse (`check_every_min` from now) — a cap at the current burn, a plan's deadline, a reset you're waiting for — ask for an earlier check at the moment you want to look again (halfway to the cap, at least 5 minutes ahead), and say when in the journal line: `echo $(( $(date +%s) + <minutes>*60 )) > ~/.yass/next-check`. Otherwise `rm -f ~/.yass/next-check`. Last, release the lock: `rmdir ~/.yass/run/check.lock`.
