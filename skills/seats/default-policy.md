@@ -18,9 +18,9 @@ These are my rules, in my words. Whoever decides on switching applies them to th
 - In the last 24 hours before a login's 7-day reset, its 7-day cap may rise evenly to 97%.
 
 ## When to switch
-- Switching is not free: each account has its own prompt cache, so after a switch every open conversation and every running subagent is re-sent once, uncached (reportedly 10–13% of a 5-hour window in a busy setup). Switch when it is cheap:
-  - right after a compaction (trigger `compact`), or when few subagents are running (their contexts total 150k tokens or less), or when no session has been active for 5+ minutes (the cache has gone cold anyway);
-  - when a switch is due but many subagents with big contexts are running, plan it: ask the main threads to stop starting new subagents, switch once the running ones have finished, then let them resume. Don't wait longer than 20 minutes.
+- Switching is not free: each account has its own prompt cache, so after a switch every conversation used in the last hour and every running subagent is re-sent once, uncached. The check measures this as the switch cost, in tokens (a 3.2M-token switch once took about 8 points of the new seat's 5-hour window).
+  - A switch is cheap when its cost is 500k tokens or less: few warm conversations and subagents, or the sessions have been idle for an hour. A compaction makes only the compacted conversation cheap; the others still count.
+  - When a switch is due but running subagents make it expensive, plan it: ask the main threads to stop starting new subagents, switch once the running ones have finished, then let them resume. Don't wait longer than 20 minutes. Waiting doesn't help when it's the open conversations that make it expensive: they stay warm while I work.
 - Look ahead, by the current seat's burn rate over its last readings (assume it may speed up):
   - a cap less than 2 hours away: a switch is coming. Take the first cheap moment for it (see above) instead of waiting for the cap;
   - less than 1 hour away and the moment isn't cheap: plan the switch now (wind-down note, then switch). Its deadline: 20 minutes, but at least 10 minutes before the cap;

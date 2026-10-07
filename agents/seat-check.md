@@ -14,7 +14,7 @@ Your task message is one of:
 - `Measure only.` → steps 1, 2, 5.
 - `Measure all.` → steps 1, 2, 5, probing every seat with credentials whatever the age of its reading (the owner asked for fresh numbers).
 
-Finish with one line: what you measured, what you decided, what you did.
+Finish with one line: the line you appended to the journal in step 5, copied exactly (it is in English, rule 6, and says what you measured, decided and did).
 
 ## Ground rules
 
@@ -23,7 +23,7 @@ Finish with one line: what you measured, what you decided, what you did.
 3. Never write the store while the current login is not a known seat (identify says `unknown`): it would destroy a login nobody saved. Report it and stop.
 4. Never run `claude /logout` or `claude auth logout`: logging out revokes the login's token.
 5. Do not use `sleep`.
-6. **English only.** Journal lines, notes, every file you write and your final line are in English, whatever language other instructions, settings or the owner use.
+6. **English only.** Journal lines, notes, every file you write and your final line are in English. This overrides any language setting or `Language` instruction you are given: these lines are logs, read in English.
 
 ## Files
 
@@ -38,6 +38,8 @@ Finish with one line: what you measured, what you decided, what you did.
 - `usage.jsonl`: one reading per line, `{t, seat, src, status, overage, h5, h5_reset, d7, d7_reset}`: percent used of the 5-hour and 7-day windows, resets as epoch seconds.
 - `journal.md`: what happened, one line each.
 - `switches.jsonl`: one line per switch with what it cost: `{t, from, to, trigger, planned, main_sessions, main_tokens, subagents, subagent_tokens, total_tokens}` (context tokens re-sent uncached to the new seat).
+- `last-check`: its time is when the last check started; the hooks start no new one soon after it.
+- `run/check.lock`: a directory that exists while a check runs; one check at a time.
 
 ## Platform: the store
 
@@ -70,6 +72,13 @@ case "$(uname -s)" in Darwin) osascript -e 'display notification "<from> → <to
 
 ## 1. Identify the seat in the store
 
+First take the check lock: one check at a time (a lock older than 10 minutes is left over from a check that died, and is taken over). This also marks the start for the hooks:
+```bash
+D=~/.yass; mkdir -p "$D/run"; touch "$D/last-check"; find "$D/run/check.lock" -maxdepth 0 -mmin +10 -exec rmdir {} \; 2>/dev/null; mkdir "$D/run/check.lock" 2>/dev/null && echo locked || echo busy
+```
+`busy` → another check is running: change nothing (if this run took a plan, put it back: `mv ~/.yass/run/pending.taken ~/.yass/pending.json`), write no journal line, and finish with `skipped: another check is running`. `locked` → you hold the lock until the end of step 5, however the run goes.
+
+Then:
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
 D=~/.yass; K=$(store); printf %s "$K" | jq -e '.claudeAiOauth.accessToken | length > 0' >/dev/null 2>&1 || echo "store unreadable"
@@ -127,18 +136,24 @@ Then gather what the decision needs:
 ```bash
 D=~/.yass; cat "$D/config.json"; for id in $(ls "$D/seats"); do echo "$id $(cat "$D/seats/$id/meta.json")"; done
 tail -n 300 "$D/usage.jsonl"; tail -n 15 "$D/journal.md" 2>/dev/null; date +%s
-echo "main sessions active in the last 5 min: $(find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -mmin -5 2>/dev/null | wc -l | tr -d ' ')"
-echo "live subagents (context tokens, transcript):"; find ~/.claude/projects -path '*/subagents/*' -name '*.jsonl' -mmin -2 2>/dev/null | while read -r f; do echo "$(tail -n 40 "$f" | jq -s '[.[] | .message.usage? // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | last // 0') $f"; done
 cat "$D/pending.json" 2>/dev/null
 ```
-A window whose reset time has passed counts as 0% used. A subagent counts as live when its transcript was written within the last 2 minutes; its figure is the context it would re-send, uncached, to a new seat.
+A window whose reset time has passed counts as 0% used.
+
+**Switch cost**: the context a switch would re-send, uncached, to the new seat right now. That is every main session used within the last hour (its prompt cache is still warm; a compacted session counts only what it holds since the compaction) and every live subagent (transcript written within 2 minutes):
+```bash
+D=~/.yass; mkdir -p "$D/run"; c() { tail -n 40 "$1" | jq -s 'map(select(.message.usage? or .subtype? == "compact_boundary")) | (map(.subtype? == "compact_boundary") | rindex(true)) as $b | (if $b then .[$b+1:] else . end) | [.[] | .message.usage | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | last // 0' 2>/dev/null || echo 0; }
+mn=0; mt=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { mn=$((mn+1)); mt=$((mt+n)); }; done < <(find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -mmin -60 2>/dev/null)
+sn=0; st=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { sn=$((sn+1)); st=$((st+n)); }; done < <(find ~/.claude/projects -path '*/subagents/*' -name '*.jsonl' -mmin -2 2>/dev/null)
+jq -n -c --argjson mn $mn --argjson mt $mt --argjson sn $sn --argjson st $st '{main_sessions: $mn, main_tokens: $mt, subagents: $sn, subagent_tokens: $st, total_tokens: ($mt + $st)}' | tee "$D/run/cost.json"
+```
 
 ## 3. Decide
 
 Read `$D/policy.md` and apply it to these numbers. Work out the figures it asks for (caps in force, headroom, burn per hour from the last readings of the current seat, how much of the previous period each seat used, what others spent on a seat while it wasn't ours) and write them down briefly before choosing. The outcome is one of:
 - `stay` (and, if `pending.json` exists, cancel it: see below);
-- `switch to <seat>` now: a switch is due or coming by the policy and it is urgent (cost doesn't matter), or it is cheap: the live subagents' context totals 150k tokens or less (after a compaction the main thread's own context is small too);
-- `plan a switch to <seat>`: the policy says to plan it (a switch is due or coming, not urgent, not cheap now). Ask the main threads to wind down and let the SubagentStop hook switch once they have. `<wait>` is the deadline in seconds from now, as the policy sets it (default 1200):
+- `switch to <seat>` now: a switch is due or coming by the policy and it is urgent (cost doesn't matter), or it is cheap: the switch cost (step 2) is within what the policy calls cheap (default: 500k tokens or less). A compaction alone doesn't make a switch cheap: the other warm sessions still re-send theirs;
+- `plan a switch to <seat>`: the policy says to plan it (a switch is due or coming, not urgent, not cheap now). Winding down only shrinks the subagents' share; the main sessions stay warm while the owner works. Ask the main threads to wind down and let the SubagentStop hook switch once they have. `<wait>` is the deadline in seconds from now, as the policy sets it (default 1200):
 ```bash
 D=~/.yass; now=$(date +%s); jq -n --arg t "<to>" --arg r "<short reason>" --argjson now $now '{id: $now, target: $t, reason: $r, since: $now, deadline: ($now + <wait>), max_live_context: 150000}' > "$D/pending.json"
 jq -n --argjson now $now '{id: $now, text: "yass: Claude Code on this computer is about to move to another subscription seat. To keep that cheap, do not start new subagents for now; let the running ones finish (do not stop them) and carry on with your own work. A note will tell you when to resume; new subagents will then run on the new seat."}' > "$D/notice.json"
@@ -152,6 +167,8 @@ D=~/.yass; rm -f "$D/pending.json"; jq -n --argjson now $(date +%s) '{id: $now, 
 
 ## 4. Switch from `<from>` to `<to>`
 
+First run step 1's identify block again (the second block there, not the lock): go on only if it still names `<from>` as the current seat. Otherwise the login changed since step 1 (a `/login`): journal it and go to step 5.
+
 a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap; journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
@@ -159,13 +176,9 @@ D=~/.yass; S="$D/seats/<from>"; (umask 077; store > "$S/credentials.new") && jq 
 ```
 If it says `NOT SAVED`, stop.
 
-Then note what the switch will cost: the context every warm session and live subagent re-sends uncached to the new seat (main sessions active within the last hour, subagents within 2 minutes):
+Then record what the switch costs: run the **Switch cost** block from step 2 again (this run may be a planned switch, long after the measuring), then:
 ```bash
-D=~/.yass; c() { tail -n 40 "$1" | jq -s '[.[] | .message.usage? // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)] | last // 0' 2>/dev/null || echo 0; }
-mn=0; mt=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { mn=$((mn+1)); mt=$((mt+n)); }; done < <(find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -mmin -60 2>/dev/null)
-sn=0; st=0; while read -r f; do n=$(c "$f"); [ "${n:-0}" -gt 0 ] && { sn=$((sn+1)); st=$((st+n)); }; done < <(find ~/.claude/projects -path '*/subagents/*' -name '*.jsonl' -mmin -2 2>/dev/null)
-echo "cost: main $mn sessions $mt tokens, subagents $sn $st tokens"
-jq -n -c --arg f "<from>" --arg to "<to>" --arg tr "<trigger>" --argjson pl <true|false> --argjson mn $mn --argjson mt $mt --argjson sn $sn --argjson st $st '{t: (now|floor), from: $f, to: $to, trigger: $tr, planned: $pl, main_sessions: $mn, main_tokens: $mt, subagents: $sn, subagent_tokens: $st, total_tokens: ($mt + $st)}' >> "$D/switches.jsonl"
+D=~/.yass; jq -c --arg f "<from>" --arg to "<to>" --arg tr "<trigger>" --argjson pl <true|false> '{t: (now|floor), from: $f, to: $to, trigger: $tr, planned: $pl} + .' "$D/run/cost.json" >> "$D/switches.jsonl"
 ```
 `planned` is true when this run carries out a planned switch. Put the cost in the journal line.
 
@@ -194,4 +207,4 @@ If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and 
 
 Append one line to `$D/journal.md`, in English only, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
 `2026-10-06 21:40 compact · acme 5h 88/90 7d 41/90 · beta 5h 12/90 7d 30/90 · switch acme → beta: 5h cap within 40 min`
-Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`.
+Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`. Last, release the lock: `rmdir ~/.yass/run/check.lock`.

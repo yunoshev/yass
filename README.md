@@ -30,7 +30,7 @@ and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10
   - keys never above 70% of either window, with the weekly cap released toward 90% on a key's last day if its owner isn't using it;
   - logins stop at 90%, before paid extra usage;
   - switch at cheap moments.
-- **Cheap moments.** The prompt cache is per account, so every open conversation and running subagent is re-sent once after a switch. A switch happens right after a compaction or when few subagents run. If many big subagents are running, the switch waits for them:
+- **Cheap moments.** The prompt cache is per account, so every conversation used in the last hour and every running subagent is re-sent once after a switch. yass measures that cost in tokens before deciding, logs it for each switch (`switches.jsonl`), and switches early only when it is small. If many big subagents are running, the switch waits for them:
   1. the main thread gets a one-time note not to start new subagents;
   2. the switch happens as soon as the running ones finish (20 minutes at most);
   3. a second note tells it to resume.
