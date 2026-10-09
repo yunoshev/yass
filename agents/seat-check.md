@@ -115,7 +115,7 @@ Then go to step 5.
 
 ## 2. Measure
 
-A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Skip a `login` seat whose token has expired (the expiry check below says so): its numbers stay as last measured.
+A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Don't probe a `login` seat whose token has expired (the expiry check below says so): its numbers stay as last measured, a window whose reset has passed counting as 0%. It is still a full candidate, for balance and as a switch target: its token renews itself on the first request after a switch to it.
 
 Current seat (the store's login):
 ```bash
