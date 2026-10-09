@@ -73,6 +73,7 @@ Requirements:
 - A login rotates its refresh token. Before every switch the current login is saved back to its seat, with the previous copy kept as `credentials.prev.json`. Swaps also wait while a login is about to renew.
 - Sessions that run on `CLAUDE_CODE_OAUTH_TOKEN` or an API key don't use the login store. The tool leaves them alone.
 - Only the official `claude` binary talks to Anthropic. There is no proxy and no direct API call.
+- The background checker runs as `claude -p --permission-mode dontAsk --allowedTools=Bash,Read,Write,Edit`: only those tools, no prompts, and no auto-mode classifier second-guessing its store reads (the classifier is non-deterministic and twice refused the read a switch needs).
 - Use only seats you are entitled to use. Borrowed keys need their owner's consent, and the reserve in the default rules exists for that owner.
 
 ## Files
