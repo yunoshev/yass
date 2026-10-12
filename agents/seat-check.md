@@ -9,6 +9,7 @@ You keep the owner's Claude Code sessions on a subscription seat (account) that 
 
 Your task message is one of:
 - `Seat check. Trigger: <compact|pulse|manual>.` → steps 1–5. `pulse` = the periodic check while sessions work.
+- `Seat check. Trigger: limit. …` → steps 1–5, urgent: a session's turn just ended on a usage limit (`rate_limit`) or an authentication error, so the current seat is cut off. This run may be on a spare seat's token (step 5) because the current one refuses requests; the probes below still reach the store's login.
 - `Switch to <seat>. Reason: <text>.` → steps 1, 4, 5 (the owner decided; skip measuring and deciding, but still respect rule 3 below).
 - `Switch to <seat>. Reason: <text>. Planned switch; …` → a planned switch whose moment has come (subagents wound down, or its deadline passed): steps 1, 4, 5.
 - `Measure only.` → steps 1, 2, 5.
@@ -33,7 +34,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 - `notice.json`: a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it with the next tool result; the Stop hook wakes a session that went idle during a wind-down and hands it the all-clear). `{id, wait_until, text}` asks to hold back new subagents (its `id` is the plan's `id`); `{id, plan, resume: true, text}` is the all-clear. The hooks write the all-clear themselves the moment they take a plan.
 - `switched.json`: `{id, msg}`, a one-line message every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`): the status after a switch, a seat added on its own (1a), or a pause (1b).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
-- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (optional, size relative to Pro: 1, 5, 20; informational, totals count every seat as 100%), `notes` (the owner's rules for this seat).
+- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (the seat's size relative to Pro: 1 = Pro, 5 = Max 5x, 20 = Max 20x; step 2 keeps it current), `size_src` (`store`, `estimate` or `owner`), `needs_login` (set when its saved login is spent: no target until the owner `/login`s with it again), `notes` (the owner's rules for this seat).
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
 - `usage.jsonl`: one reading per line, `{t, seat, src, status, overage, h5, h5_reset, d7, d7_reset}`: percent used of the 5-hour and 7-day windows, resets as epoch seconds.
 - `journal.md`: what happened, one line each.
@@ -41,6 +42,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 - `last-check`: its time is when the last check started; the hooks start no new one soon after it.
 - `next-check`: epoch seconds; the PostToolUse hook starts a check at that time even if the pulse isn't due yet (step 5).
 - `run/check.lock`: a directory that exists while a check runs; one check at a time.
+- `run/spare`: the id of the seat a `limit` check runs on (step 5). The StopFailure hook starts that check, waits for the switch and then wakes the stopped session (`run/woke-<session>-<switch time>` marks it done).
 
 ## Platform: the store
 
@@ -96,6 +98,17 @@ printf %s "$K" | jq -r '"store expires in min: \(((.claudeAiOauth.expiresAt // 0
 
 `exact` or `rotated` (a login renewed its tokens since it was saved; normal) names the current seat. `rotated` compares the pair `accountUuid` + `organizationUuid`, never the account alone: one person can belong to several organizations, each its own seat with the same `accountUuid`. `exact` beats `rotated`. Several `exact`, or no `exact` and several `rotated` → `unknown` (name the seats). No match = `unknown`. If `config.json`'s `active` differs from what you found, fix it (step 5).
 
+**Keep the current login saved.** If the current seat is a `login` matched as `rotated`, save it back now with the save block of step 4a: the store holds its newest tokens, and a later `/login` over it then loses nothing. If its meta has `needs_login`, the owner has just logged in with it again: remove the field (`jq 'del(.needs_login)'`, as below).
+
+**A spent login.** If `active` named a `login` seat and the store now holds another seat that no switch put there (the owner ran `/login`), check whether the replaced seat's saved login is spent: its saved access token had expired before the last switch to it (the first request after that switch renewed it and used up the saved refresh token), and its file is older than that switch:
+```bash
+D=~/.yass; S="$D/seats/<seat>"; sw=$(jq -s --arg s "<seat>" '[.[] | select(.to == $s) | .t] | max // 0' "$D/switches.jsonl"); ex=$(jq '(.claudeAiOauth.expiresAt // 0)/1000 | floor' "$S/credentials.json"); mt=$(stat -f %m "$S/credentials.json" 2>/dev/null || stat -c %Y "$S/credentials.json"); [ "$ex" -lt "$sw" ] && [ "$mt" -lt "$sw" ] && echo spent || echo ok
+```
+`spent` → mark it, and tell the operator once with 1b's message command, text `yass: seat <seat> needs one /login: a /login replaced it before its renewed login was saved`:
+```bash
+D=~/.yass; S="$D/seats/<seat>"; jq '.needs_login = (now|todate)' "$S/meta.json" > "$S/meta.tmp" && mv "$S/meta.tmp" "$S/meta.json"
+```
+
 **1a. A new login.** No seat matched at all, and the store holds a login (it has a refresh token: the owner ran `/login` with an account yass doesn't know yet). Save it as a new seat yourself, then carry on with it as the current seat. Never touch the store here. The name comes from the organization, or from the email for a personal organization:
 ```bash
 D=~/.yass; n=$(jq -r '.oauthAccount | (.organizationName // "") as $o | (if $o == "" or ($o | test("s Organization$")) then ((.emailAddress // "") | split("@") | .[0] // "login") else $o end) | ascii_downcase | gsub("[^a-z0-9]"; "")' ~/.claude.json | cut -c1-20); n=${n:-login}; id=$n; i=2; while [ -e "$D/seats/$id" ]; do id="$n$i"; i=$((i+1)); done; echo "new seat: $id"
@@ -115,7 +128,7 @@ Then go to step 5.
 
 ## 2. Measure
 
-A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Don't probe a `login` seat whose token has expired (the expiry check below says so): its numbers stay as last measured, a window whose reset has passed counting as 0%. It is still a full candidate, for balance and as a switch target: its token renews itself on the first request after a switch to it.
+A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual`/`limit` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Don't probe a `login` seat whose token has expired (the expiry check below says so): its numbers stay as last measured, a window whose reset has passed counting as 0%. It still counts for balance, and its token renews itself on the first request after a switch to it, but as a target it is unmeasured (step 3). Never probe or choose a seat with `needs_login`.
 
 Current seat (the store's login):
 ```bash
@@ -131,7 +144,7 @@ D=~/.yass; jq -r '"expires in min: \(((.claudeAiOauth.expiresAt // 0)/1000 - now
 CLAUDE_CODE_OAUTH_TOKEN="$(jq -r .claudeAiOauth.accessToken "$D/seats/<seat>/credentials.json")" YASS_CHILD=1 "${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}" -p ok … (rest exactly as above)
 ```
 
-An empty result means the probe failed: say so, and don't count that seat as measured.
+An empty result means the probe failed: say so, and don't count that seat as measured. On a `limit` check, a failed probe of the current seat, or one that reads `rejected`, means the seat is cut off: count its 5-hour window as full until its reset (from the probe, else the latest reading, else 5 hours from now).
 
 Then gather what the decision needs:
 ```bash
@@ -140,6 +153,13 @@ tail -n 300 "$D/usage.jsonl"; tail -n 15 "$D/journal.md" 2>/dev/null; date +%s
 cat "$D/pending.json" 2>/dev/null
 ```
 A window whose reset time has passed counts as 0% used.
+
+**Seat sizes.** One point of a window holds as many tokens as the seat's size says (`capacity`: 1 = Pro, 5 = Max 5x, 20 = Max 20x), and a login's plan can change any day (the owner upgrades or downgrades). Claude Code writes a login's current plan into the store each time it renews the login, so while the current seat is a `login`, read its size from the store every check (skip this for a key):
+```bash
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+D=~/.yass; S="$D/seats/<seat>"; store | jq -c '.claudeAiOauth | {sub: (.subscriptionType // null), tier: (.rateLimitTier // null)}' > "$S/plan.tmp" && jq --slurpfile p "$S/plan.tmp" '$p[0] as $p | ($p.tier // "") as $t | if $p.sub == null and $p.tier == null then . else .capacity = (if ($t|test("20x")) then 20 elif ($t|test("5x")) then 5 else 1 end) | .plan_detected = "\($p.sub // "?") \($p.tier // "")" | .size_src = "store" end' "$S/meta.json" > "$S/meta.tmp" && mv "$S/meta.tmp" "$S/meta.json"; rm -f "$S/plan.tmp"; jq -c '{capacity, plan_detected}' "$S/meta.json"
+```
+If the size changed, say so in the journal line. A key's plan can't be read (its token has no access to its account): estimate its size at the first check after a switch to it, from how many points its 5-hour window gained per 1M tokens of that switch's cost (`switches.jsonl`): about 12 → 1, about 2.5 → 5, about 0.6 → 20; write it as `capacity` with `size_src: "estimate"` (the same `jq … > "$S/meta.tmp" && mv` form). Until a size is known, count it as 1 when checking that a target can take the load (step 3).
 
 **Switch cost**: the context a switch would re-send, uncached, to the new seat right now. That is every main session used within the last hour (its prompt cache is still warm; a compacted session counts only what it holds since the compaction) and every live subagent (transcript written within 2 minutes):
 ```bash
@@ -151,9 +171,13 @@ jq -n -c --argjson mn $mn --argjson mt $mt --argjson sn $sn --argjson st $st '{m
 
 ## 3. Decide
 
-Read `$D/policy.md` and apply it to these numbers. If you would switch to a seat (now or by a plan) whose latest reading is older than its last switch away from it in `switches.jsonl`, it was used after that reading: probe it first (step 2), then decide. Work out the figures it asks for (caps in force, headroom, burn per hour from the last readings of the current seat, how much of the previous period each seat used, what others spent on a seat while it wasn't ours) and write them down briefly before choosing. The outcome is one of:
+Read `$D/policy.md` and apply it to these numbers. If you would switch to a seat (now or by a plan) whose latest reading is older than its last switch away from it in `switches.jsonl`, it was used after that reading: probe it first (step 2), then decide.
+
+**A target must be able to take the load**, whatever the balance rules favor: its 5-hour room under its cap, in its own points, must hold the switch cost plus an hour of the current burn (or the burn until its 5-hour reset, if that comes sooner). In the target's points the switch cost is about 12 points per 1M tokens divided by its size (Pro 12, Max 5x 2.5, Max 20x 0.6 per 1M), and the burn is the current seat's points per hour × its size ÷ the target's size (a size not known: count the current seat as 5 and the target as 1). A seat that can't take it is no target. Among those that can, compare room in tokens (points × size), not percent: 20 points of a Pro seat hold less than 5 of a Max 5x. Prefer a seat measured in this run or recently: switch to an unmeasured one (expired login token, failed probe) only when no measured seat can take the load. If none can, take the one with the most room in tokens. Write the figures for the target you pick in the journal line.
+
+Work out the figures it asks for (caps in force, headroom, burn per hour from the last readings of the current seat, how much of the previous period each seat used, what others spent on a seat while it wasn't ours) and write them down briefly before choosing. The outcome is one of:
 - `stay` (and, if `pending.json` exists, cancel it: see below);
-- `switch to <seat>` now: a switch is due or coming by the policy and it is urgent (cost doesn't matter: never weigh the policy's "at once" rules against re-sends or a coming reset; staying is right only if the window resets before the cap at the current burn, assuming it may speed up), or it is cheap: the switch cost (step 2) is within what the policy calls cheap (default: 500k tokens or less). A compaction alone doesn't make a switch cheap: the other warm sessions still re-send theirs;
+- `switch to <seat>` now: a switch is due or coming by the policy and it is urgent (a `limit` check always is; cost doesn't matter: never weigh the policy's "at once" rules against re-sends or a coming reset; staying is right only if the window resets before the cap at the current burn, assuming it may speed up), or it is cheap: the switch cost (step 2) is within what the policy calls cheap (default: 500k tokens or less). A compaction alone doesn't make a switch cheap: the other warm sessions still re-send theirs;
 - `plan a switch to <seat>`: the policy says to plan it (a switch is due or coming, not urgent, not cheap now) **and** waiting can make it cheaper: the live subagents' context is above 150k. Winding down only shrinks the subagents' share; the main sessions stay warm while the owner works. If the subagents' share is already 150k or less, a plan waits for nothing (no subagent is left to finish and trigger it) while the burn goes on: switch now instead. Ask the main threads to wind down and let the SubagentStop hook switch once they have. `<wait>` is the deadline in seconds from now, as the policy sets it (default 1200):
 ```bash
 D=~/.yass; now=$(date +%s); jq -n --arg t "<to>" --arg r "<short reason>" --argjson now $now '{id: $now, target: $t, reason: $r, since: $now, deadline: ($now + <wait>), max_live_context: 150000}' > "$D/pending.json"
@@ -174,7 +198,7 @@ D=~/.yass; jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/pending.
 
 First run step 1's identify block again (the second block there, not the lock): go on only if it still names `<from>` as the current seat. Otherwise the login changed since step 1 (a `/login`): journal it and go to step 5. If `<to>` is the current seat already, there is nothing to switch: `rm -f ~/.yass/run/pending.taken` and go to step 5.
 
-a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap; journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
+a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap or cut off (a `limit` check); journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
 D=~/.yass; S="$D/seats/<from>"; (umask 077; store > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
@@ -212,4 +236,8 @@ If b says `FAILED`, put `<from>` back with R2 (its file is current after a) and 
 
 Append one line to `$D/journal.md`, in English only, with local times (never epoch numbers): the time, trigger, the key numbers and the outcome, e.g.:
 `2026-10-06 21:40 compact · acme 5h 88/90 7d 41/90 · beta 5h 12/90 7d 30/90 · switch acme → beta: 5h cap within 40 min`
-Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run -name 'noted-*' -mtime +1 -delete 2>/dev/null`. Then the next look: if something that matters may happen before the next pulse (`check_every_min` from now) — a cap at the current burn, a plan's deadline, a reset you're waiting for — ask for an earlier check at the moment you want to look again (halfway to the cap, at least 5 minutes ahead), and say when in the journal line: `echo $(( $(date +%s) + <minutes>*60 )) > ~/.yass/next-check`. Otherwise `rm -f ~/.yass/next-check`. Last, release the lock: `rmdir ~/.yass/run/check.lock`.
+Fix `config.json`'s `active` if step 1 found a different seat. Clear old delivery marks: `find ~/.yass/run \( -name 'noted-*' -o -name 'woke-*' \) -mtime +1 -delete 2>/dev/null`.
+
+Then the spare: the seat a `limit` check would run on if the current one were cut off. Pick a seat other than the current one with a usable token (a key, or a login whose saved access token is valid at least 2 more hours), no `needs_login`, under its caps, with the most 5-hour room in tokens; write its id, or remove the file when none fits: `echo <seat> > ~/.yass/run/spare` / `rm -f ~/.yass/run/spare`.
+
+Then the next look: after a switch, always look again 10 minutes later (5 if the new seat was unmeasured): that check measures the new seat after the re-send, saves its renewed login and reads its size. Otherwise, if something that matters may happen before the next pulse (`check_every_min` from now) — a cap at the current burn, a plan's deadline, a reset you're waiting for — ask for an earlier check at the moment you want to look again (halfway to the cap, at least 5 minutes ahead). Say when in the journal line: `echo $(( $(date +%s) + <minutes>*60 )) > ~/.yass/next-check`. Otherwise `rm -f ~/.yass/next-check`. Last, release the lock: `rmdir ~/.yass/run/check.lock`.
