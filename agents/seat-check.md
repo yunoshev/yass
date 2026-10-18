@@ -185,6 +185,12 @@ jq -n -c --argjson now $now --argjson w $((now + <wait>)) '{id: $now, wait_until
 ```
 - `exhausted` (every seat is at its cap; tell the owner, change nothing).
 
+**Exception, a small current seat** (size 1, Pro). The same work moves its windows about five times faster than on a Max 5x seat, so its cap comes minutes after the readings show it coming, and a plan would wait out the cap (a Pro login went from 37% to 101% of its 5-hour window in 7 minutes while a plan waited for subagents). While the current seat is small:
+- its burn is the faster of its own points per hour and the previous seat's burn in Pro points (that seat's points per hour over its last hour of work × its size): its first readings after a switch to it are mostly the re-send, and too few to judge by;
+- never `plan a switch` from it: whenever a switch is due or coming by the policy, `switch to <seat>` now, whatever the cost. A plan already waiting to leave it is taken now, its deadline passed or not;
+- look again within 5 minutes (step 5) while it stays current.
+This changes nothing when a small seat is a target or the spare.
+
 If `pending.json` already exists: its deadline passed → take it and send the all-clear, then switch to its target now:
 ```bash
 D=~/.yass; mv "$D/pending.json" "$D/run/pending.taken" && jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/run/pending.taken")" '{id: $now, plan: $p, resume: true, text: "yass: the seat switch is starting now. If you were holding back subagents, start them; otherwise carry on as before."}' > "$D/notice.json"

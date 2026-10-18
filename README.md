@@ -35,7 +35,7 @@ and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10
   2. the switch happens as soon as the running ones finish (20 minutes at most);
   3. a second note tells it to go on; a session that went idle meanwhile is woken with it (a `Stop` hook with `asyncRewake`).
 
-  Near a cap, it switches at once.
+  Near a cap, it switches at once; so it does from a small seat (Pro), whose windows move about five times faster than a Max 5x seat's.
 - **When a limit hits anyway.** A session whose turn ends on a usage limit (or an authentication error) starts an urgent check through a `StopFailure` hook. The check runs on a spare seat's token, since the cut-off seat refuses requests, picks a target that can take the load, switches, and the hook wakes the session (`asyncRewake`) to carry on, with no `/login` and no "continue" from you.
 - **Plans are read, not asked.** A login's plan (Pro, Max 5x, Max 20x) comes from the login store at every check: Claude Code writes the current plan there each time it renews the login, so an upgrade or downgrade is picked up by itself. A key's plan can't be read; yass estimates it from how fast its window fills. A target must hold the switch's re-send plus an hour of work at its own size: 20% of a Pro seat holds less than 5% of a Max 5x.
 
