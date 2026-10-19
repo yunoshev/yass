@@ -21,7 +21,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 
 1. **Secrets never enter your context.** Never print, cat, echo, Read or grep a credentials file, the store, or a token. Pass them only file-to-command, inside the commands below (`$(jq … file)` expands in the shell, never in your context). Compare tokens only inside the shell (`[ "$(jq …)" = "$(jq …)" ]`), never by showing them. If a command would show a secret, do not run it.
 2. Use the commands below as written; change only the placeholders (`<seat>`, `<from>`, `<to>`). Do not invent other ways to reach the store or `~/.claude.json`.
-3. Never write the store while the current login is not a known seat (identify says `unknown`): it would destroy a login nobody saved. Report it and stop.
+3. Never write the store while the current login is not a known seat (identify says `unknown`): it would destroy a login nobody saved. Report it and stop. The one exception is an empty store right after a switch (step 1, **A switch that failed**): it holds no login to destroy.
 4. Never run `claude /logout` or `claude auth logout`: logging out revokes the login's token.
 5. Do not use `sleep`.
 6. **English only.** Journal lines, notes, every file you write and your final line are in English. This overrides any language setting or `Language` instruction you are given: these lines are logs, read in English.
@@ -85,6 +85,7 @@ Then:
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
 D=~/.yass; K=$(store); printf %s "$K" | jq -e '.claudeAiOauth.accessToken | length > 0' >/dev/null 2>&1 || echo "store unreadable"
+printf %s "$K" | jq -e '(.claudeAiOauth.accessToken // "") == "" and (.claudeAiOauth.refreshToken // "") == ""' >/dev/null 2>&1 && echo "store empty"
 t() { jq -r ".claudeAiOauth.$1 // empty" 2>/dev/null; }; ca=$(printf %s "$K" | t accessToken); cr=$(printf %s "$K" | t refreshToken)
 uuid=$(jq -r '.oauthAccount.accountUuid // empty' ~/.claude.json); org=$(jq -r '.oauthAccount.organizationUuid // empty' ~/.claude.json)
 for id in $(ls "$D/seats"); do f="$D/seats/$id/credentials.json"; m=no
@@ -94,20 +95,28 @@ for id in $(ls "$D/seats"); do f="$D/seats/$id/credentials.json"; m=no
   echo "$id $m"; done
 printf %s "$K" | jq -r '"store expires in min: \(((.claudeAiOauth.expiresAt // 0)/1000 - now)/60 | floor)"'
 ```
-`store unreadable` → 1b.
+`store unreadable` → 1b, unless it also says `store empty` and a switch just failed (**A switch that failed**, below).
 
 `exact` or `rotated` (a login renewed its tokens since it was saved; normal) names the current seat. `rotated` compares the pair `accountUuid` + `organizationUuid`, never the account alone: one person can belong to several organizations, each its own seat with the same `accountUuid`. `exact` beats `rotated`. Several `exact`, or no `exact` and several `rotated` → `unknown` (name the seats). No match = `unknown`. If `config.json`'s `active` differs from what you found, fix it (step 5).
 
 **Keep the current login saved.** If the current seat is a `login` matched as `rotated`, save it back now with the save block of step 4a: the store holds its newest tokens, and a later `/login` over it then loses nothing. If its meta has `needs_login`, the owner has just logged in with it again: remove the field (`jq 'del(.needs_login)'`, as below).
 
-**A spent login.** If `active` named a `login` seat and the store now holds another seat that no switch put there (the owner ran `/login`), check whether the replaced seat's saved login is spent: its saved access token had expired before the last switch to it (the first request after that switch renewed it and used up the saved refresh token), and its file is older than that switch:
+**A spent login.** If `active` named a `login` seat and the store now holds another seat that no switch put there (the owner ran `/login`), check whether the replaced seat's saved login is spent. The store held that saved login when it was last switched to or saved back, and kept it until the `/login`, whose time nobody knows. Claude Code renews a login a few minutes before its access token expires, at the next request, and the renewal uses up the saved refresh token. So once the saved token's expiry is near or past, a renewal may have come before the `/login`: count it as spent. A false alarm costs the owner one `/login`; a spent login written into the store logs every session out (a seat whose saved token expired at 20:29 was replaced by a `/login` some time before 22:18, the old check said `ok` because its token was valid at the switch to it, and the switch back at 23:04 emptied the store):
 ```bash
-D=~/.yass; S="$D/seats/<seat>"; sw=$(jq -s --arg s "<seat>" '[.[] | select(.to == $s) | .t] | max // 0' "$D/switches.jsonl"); ex=$(jq '(.claudeAiOauth.expiresAt // 0)/1000 | floor' "$S/credentials.json"); mt=$(stat -f %m "$S/credentials.json" 2>/dev/null || stat -c %Y "$S/credentials.json"); [ "$ex" -lt "$sw" ] && [ "$mt" -lt "$sw" ] && echo spent || echo ok
+D=~/.yass; jq -r 'if (.claudeAiOauth.expiresAt // 0)/1000 - 600 < now then "spent" else "ok" end' "$D/seats/<seat>/credentials.json"
 ```
 `spent` → mark it, and tell the operator once with 1b's message command, text `yass: seat <seat> needs one /login: a /login replaced it before its renewed login was saved`:
 ```bash
 D=~/.yass; S="$D/seats/<seat>"; jq '.needs_login = (now|todate)' "$S/meta.json" > "$S/meta.tmp" && mv "$S/meta.tmp" "$S/meta.json"
 ```
+
+**A switch that failed.** Identify says `store empty` (Claude Code empties the store when it can't renew the login there), the last line of `switches.jsonl` is a switch to a `login` seat less than 30 minutes ago, and `config.json`'s `active` is still that seat: the login that switch wrote was spent, its first request failed, and every session is logged out until a login is back. That switch saved `<from>`'s newest login just before, and the empty store has nothing to lose (rule 3), so put `<from>` back:
+- mark `<to>` with the `needs_login` command above;
+- write `<from>` into the store with R2 and its check;
+- if `<from>` is a login, run step 4c with it; then the `config.json` command of step 4d with `<from>` as `<to>` (its new `last_switch` lets the StopFailure hook wake the stopped sessions);
+- tell the operator with 1b's message command, text `yass: the switch to <to> failed (its saved login was spent); back on <from>. <to> needs one /login`.
+
+Don't measure or decide in this run: go to step 5 and look again in 5 minutes. If the check says `FAILED`, or any condition above doesn't hold → 1b.
 
 **1a. A new login.** No seat matched at all, and the store holds a login (it has a refresh token: the owner ran `/login` with an account yass doesn't know yet). Save it as a new seat yourself, then carry on with it as the current seat. Never touch the store here. The name comes from the organization, or from the email for a personal organization:
 ```bash
