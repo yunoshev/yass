@@ -11,7 +11,7 @@ Keeps Claude Code on whichever of your subscription seats still has room. It wat
 ## How it works
 
 ```
-compaction, or every N minutes of activity (you pick N)
+compaction, a /login, or every N minutes of activity (you pick N)
         │  hook (a one-line shell command)
         ▼
 claude -p --agent seat-check      ← a model in the background, your session isn't touched
@@ -24,7 +24,7 @@ every Claude Code session on this computer moves to the new seat, no restart
 and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)
 ```
 
-- **Seats** are `/login` accounts (they renew themselves; `/login` with a new one and the next check adds it as a seat by itself) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
+- **Seats** are `/login` accounts (they renew themselves; `/login` with a new one and the check it starts adds it as a seat by itself) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
 - **Your rules** live in `~/.yass/policy.md`. Onboarding starts from a default and rewrites it with what you say. The default:
   - spread the load evenly, looking at what each seat used last period;
   - keys never above 70% of either window, with the weekly cap released toward 90% on a key's last day if its owner isn't using it;
@@ -85,7 +85,7 @@ Requirements:
 | `skills/seats/SKILL.md` | onboarding and everyday requests: status, switch, pause, rules |
 | `skills/seats/default-policy.md` | the default rules onboarding starts from |
 | `agents/seat-check.md` | the background checker: measure, decide, switch |
-| `hooks/hooks.json` | five one-line hooks: compaction and the activity pulse start the checker; `PostToolUse` shows each session a one-line status after a switch, delivers the wind-down/resume notes to the main thread and starts a planned switch whose deadline passed; `SubagentStop` starts a planned switch once subagents have wound down; `Stop` wakes a session that went idle during a wind-down when the switch is under way; `StopFailure` starts an urgent check when a turn ends on a usage limit and wakes the session after the switch |
+| `hooks/hooks.json` | five one-line hooks: compaction, the activity pulse and a `/login` (the account in `~/.claude.json` changed) start the checker; `PostToolUse` shows each session a one-line status after a switch, delivers the wind-down/resume notes to the main thread and starts a planned switch whose deadline passed; `SubagentStop` starts a planned switch once subagents have wound down; `Stop` wakes a session that went idle during a wind-down when the switch is under way; `StopFailure` starts an urgent check when a turn ends on a usage limit and wakes the session after the switch |
 | `~/.yass/` | your seats, `policy.md`, `usage.jsonl`, `journal.md` |
 
 ## License
