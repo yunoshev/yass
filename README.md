@@ -16,7 +16,7 @@ compaction, a /login, or every N minutes of activity (you pick N)
         ▼
 claude -p --agent seat-check      ← a model in the background, your session isn't touched
         │  1. which seat is in the login store now (Keychain / credentials file)
-        │  2. probe the seats: one tiny request each, read back the rate-limit windows
+        │  2. renew idle logins, probe the seats: one tiny request each, read back the rate-limit windows
         │  3. apply ~/.yass/policy.md, your rules in your words
         │  4. switch: save the current login, write the target into the store
         ▼
@@ -24,7 +24,7 @@ every Claude Code session on this computer moves to the new seat, no restart
 and shows you one line: yass 22:25 → acme 3%/31% · from beta 88%/40% · k1 10%/0% (5h/7d)
 ```
 
-- **Seats** are `/login` accounts (they renew themselves; `/login` with a new one and the check it starts adds it as a seat by itself) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
+- **Seats** are `/login` accounts (they renew themselves while in use, and yass renews an idle one before its saved copy runs out, so every login stays ready and measurable; `/login` with a new one and the check it starts adds it as a seat by itself) and long-lived tokens from `claude setup-token` (valid for a year; yass calls them keys). Per [Claude Code's docs](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token), a token "can only make model requests": while you're on a key, Remote Control and claude.ai connectors don't work; MCP servers you configure locally do. One more reason to keep keys as a reserve.
 - **Your rules** live in `~/.yass/policy.md`. Onboarding starts from a default and rewrites it with what you say. The default:
   - spread the load evenly, looking at what each seat used last period;
   - keys never above 70% of either window, with the weekly cap released toward 90% on a key's last day if its owner isn't using it;
@@ -66,13 +66,14 @@ Requirements:
 - macOS or Linux. Where the login lives ([Claude Code docs](https://code.claude.com/docs/en/authentication#credential-management)): the Keychain on macOS (sessions pick up a swap within ~30 s), `~/.claude/.credentials.json` on Linux (a running session re-reads it before every request; verified in a container with Claude Code 2.1.290). Windows: not yet, see [TODO.md](TODO.md);
 - `jq` (macOS ships it; on Linux install it), plus `xxd` on macOS (ships with it);
 - on Linux, adding keys uses `wl-paste` or `xclip` when there is a desktop clipboard; on a server you save the token to `~/.yass/inbox.token` from your own terminal instead (onboarding shows how);
-- written against Claude Code 2.1.288.
+- written against Claude Code 2.1.288; renewing idle logins on macOS relies on how Claude Code (checked in 2.1.309) names a config directory's Keychain item.
 
 ## Safety
 
 - Tokens never reach a model. Prompts move them file-to-file inside shell commands and compare them only by hash. The seat files are `0600` in a `0700` folder.
 - `/logout` revokes the login it ends, so the prompts never use it. `/login` alone is safe.
 - A login rotates its refresh token. Before every switch the current login is saved back to its seat, with the previous copy kept as `credentials.prev.json`. Swaps also wait while a login is about to renew.
+- An idle login is renewed before its saved access token runs out (it lasts about 8 hours): yass copies the login into a scratch config directory (`~/.yass/run/renew`), lets the official `claude` binary renew it there with one tiny request, saves the renewed login back (the previous copy kept) and removes the scratch copy. Never the login in use: the sessions renew that one. A login that no longer renews is marked as needing one `/login` and you are told, before a switch to it could log the sessions out.
 - Sessions that run on `CLAUDE_CODE_OAUTH_TOKEN` or an API key don't use the login store. The tool leaves them alone.
 - Only the official `claude` binary talks to Anthropic. There is no proxy and no direct API call.
 - The background checker runs as `claude -p --permission-mode dontAsk --allowedTools=Bash,Read,Write,Edit`: only those tools, no prompts, and no auto-mode classifier second-guessing its store reads (the classifier is non-deterministic and twice refused the read a switch needs).

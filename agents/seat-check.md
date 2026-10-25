@@ -34,7 +34,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 - `notice.json`: a note every session's main thread gets once, within 30 minutes of being written (the PostToolUse hook delivers it with the next tool result; the Stop hook wakes a session that went idle during a wind-down and hands it the all-clear). `{id, wait_until, text}` asks to hold back new subagents (its `id` is the plan's `id`); `{id, plan, resume: true, text}` is the all-clear. The hooks write the all-clear themselves the moment they take a plan.
 - `switched.json`: `{id, msg}`, a one-line message every session shows its operator once, within 60 minutes (the PostToolUse hook, as `systemMessage`): the status after a switch, a seat added on its own (1a), or a pause (1b).
 - `policy.md`: the owner's rules. Read it whole before deciding; it overrides anything here except the ground rules.
-- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (the seat's size relative to Pro: 1 = Pro, 5 = Max 5x, 20 = Max 20x; step 2 keeps it current), `size_src` (`store`, `estimate` or `owner`), `needs_login` (set when its saved login is spent: no target until the owner `/login`s with it again), `notes` (the owner's rules for this seat).
+- `seats/<seat>/meta.json`: `kind` (`login` = a /login account, renews itself while in use and is renewed by you while idle, step 2; `key` = a `claude setup-token` key), `label`, `owner`, `plan`, `capacity` (the seat's size relative to Pro: 1 = Pro, 5 = Max 5x, 20 = Max 20x; step 2 keeps it current), `size_src` (`store`, `estimate` or `owner`), `needs_login` (set when its saved login is spent: no target until the owner `/login`s with it again), `notes` (the owner's rules for this seat).
 - `seats/<seat>/credentials.json` (secret), `seats/<seat>/account.json` (login seats: the account as `~/.claude.json` shows it; not secret).
 - `usage.jsonl`: one reading per line, `{t, seat, src, status, overage, h5, h5_reset, d7, d7_reset}`: percent used of the 5-hour and 7-day windows, resets as epoch seconds.
 - `journal.md`: what happened, one line each.
@@ -42,6 +42,7 @@ Finish with one line: the line you appended to the journal in step 5, copied exa
 - `last-check`: its time is when the last check started; the hooks start no new one soon after it.
 - `next-check`: epoch seconds; the PostToolUse hook starts a check at that time even if the pulse isn't due yet (step 5).
 - `run/check.lock`: a directory that exists while a check runs; one check at a time.
+- `run/renew/`: a scratch Claude Code config directory that exists while an idle login is renewed (step 2).
 - `run/spare`: the id of the seat a `limit` check runs on (step 5). The StopFailure hook starts that check, waits for the switch and then wakes the stopped session (`run/woke-<session>-<switch time>` marks it done).
 
 ## Platform: the store
@@ -137,7 +138,36 @@ Then go to step 5.
 
 ## 2. Measure
 
-A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual`/`limit` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Don't probe a `login` seat whose token has expired (the expiry check below says so): its numbers stay as last measured, a window whose reset has passed counting as 0%. It still counts for balance, and its token renews itself on the first request after a switch to it, but as a target it is unmeasured (step 3). Never probe or choose a seat with `needs_login`.
+**Renew idle logins first.** A login's access token lasts about 8 hours and only a request renews it, so the saved copy of a login nobody is using expires, and an expired one can't be probed. Keep them fresh: for each `login` seat other than the current one, without `needs_login`, whose saved token expires within 180 minutes or has expired (the expiry check of **Another seat** below), run this block with its id, one seat at a time. Never for the current seat: the sessions renew the store's copy themselves, and renewing a second copy of it would spend the refresh token the store holds. The block copies the saved login into a scratch config directory, lets Claude Code renew it there with one tiny request (it opens the seat's 5-hour window if that was idle), saves the renewed login back to the seat (the previous copy kept as `credentials.prev.json`) and removes the scratch copy. It first saves a renewed login that a run which died left behind.
+```bash
+D=~/.yass; R="$D/run/renew"; C="${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}"; a=${USER:-}; [[ "$a" =~ ^[A-Za-z0-9._-]+$ ]] || a=claude-code-user
+svc=; [ "$(uname -s)" = Darwin ] && svc="Claude Code-credentials-$(printf %s "$R" | shasum -a 256 | cut -c1-8)"
+cl() { env -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$R" CLAUDE_SECURESTORAGE_CONFIG_DIR="$R" DISABLE_AUTOUPDATER=1 YASS_CHILD=1 "$C" "$@"; }
+held() { case "$(uname -s)" in Darwin) security find-generic-password -a "$a" -s "$svc" -w 2>/dev/null ;; esac; cat "$R/.credentials.json" 2>/dev/null; }
+drop() { case "$(uname -s)" in Darwin) security delete-generic-password -a "$a" -s "$svc" >/dev/null 2>&1 ;; esac; rm -rf "$R"; }
+keep() { s=$(cat "$R/seat" 2>/dev/null); [ -n "$s" ] || return 1; S="$D/seats/$s"
+  (umask 077; held | jq -c -s --slurpfile o "$S/credentials.json" '[.[] | select((.claudeAiOauth.refreshToken // "") != "" and .claudeAiOauth.refreshToken != $o[0].claudeAiOauth.refreshToken and (.claudeAiOauth.expiresAt // 0)/1000 > now + 3600)] | max_by(.claudeAiOauth.expiresAt) // empty' > "$R/out.json" 2>/dev/null)
+  [ -s "$R/out.json" ] && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$R/out.json" "$S/credentials.json" && echo "renewed $s" || { rm -f "$R/out.json"; return 1; }; }
+keep; drop
+S="$D/seats/<seat>"; (umask 077; mkdir -p "$R" && echo "<seat>" > "$R/seat" && jq -c '.claudeAiOauth.expiresAt = 0' "$S/credentials.json" > "$R/in.json")
+case "$(uname -s)" in
+  Darwin) printf 'add-generic-password -U -a "%s" -s "%s" -X %s\n' "$a" "$svc" "$(tr -d '\n' < "$R/in.json" | xxd -p | tr -d '\n')" | security -i >/dev/null 2>&1; rm -f "$R/in.json" ;;
+  Linux) mv "$R/in.json" "$R/.credentials.json" ;;
+esac
+if [ "$(cl auth status 2>/dev/null | jq -r .loggedIn 2>/dev/null)" != true ]; then echo "not renewed: Claude Code doesn't see the copy"
+else cl -p ok --model haiku --setting-sources "" --tools "" --strict-mcp-config --no-session-persistence --system-prompt "Reply with exactly: ok" --output-format json 2>/dev/null \
+   | jq -r -s '[.[] | (if type=="array" then .[] else . end) | select(.type=="result")] | first // {} | "request: " + (if .is_error then "error: " + ((.result // "?") | tostring | .[0:160]) elif .result then "answered" else "no answer" end)' 2>/dev/null || echo "request: no answer"
+  keep || echo "not renewed: the copy is $(held | jq -r -s 'if any(.[]; (.claudeAiOauth.refreshToken // "") != "") then "unchanged" else "emptied" end')"
+fi
+drop
+```
+(The copy goes in marked as expired, so Claude Code renews it before its request. `CLAUDE_SECURESTORAGE_CONFIG_DIR` names the Keychain item `Claude Code-credentials-<first 8 hex of sha256 of the directory>`, the name Claude Code 2.1.309 gives a config directory's login. That request's answer carries no usage numbers: measure the seat with a probe as usual.)
+- `renewed <seat>`: done, whatever the request says (a seat at its limit still renews). It is now probeable.
+- `not renewed: Claude Code doesn't see the copy`: nothing was spent (Claude Code didn't find the copy, perhaps a new version names its store differently). Say so in the journal and renew no other seat this run.
+- `not renewed: the copy is emptied`, or a `request: error` about authentication (OAuth, 401, "log in", invalid or revoked token): the saved login is spent; it can never come back without a `/login`. Mark it and tell the operator, both with the commands of **A spent login** (step 1), text `yass: seat <seat> needs one /login: its saved login no longer renews`.
+- `not renewed: the copy is unchanged` (a network error or the like): say so in the journal; the next check tries again.
+
+A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual`/`limit` or the current seat is within 15 points of a cap in its policy. A probe opens the 5-hour window of an idle seat, so don't probe for nothing. Don't probe a `login` seat whose token has expired (its renewal failed; the expiry check below says so): its numbers stay as last measured, a window whose reset has passed counting as 0%. It still counts for balance, and its token renews itself on the first request after a switch to it, but as a target it is unmeasured (step 3). Never probe or choose a seat with `needs_login`.
 
 Current seat (the store's login):
 ```bash
