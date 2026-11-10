@@ -1,6 +1,6 @@
 ---
 name: seats
-description: Set up and run yass, which keeps Claude Code on whichever subscription seat (account or setup-token key) still has room, by rules the owner states in plain words. Use for onboarding ("set up seats", "add an account/key"); for limits and usage questions in any language: how much is used or left across all seats, burn rate, runway, a limits summary ("limits", "how much is left", "usage summary", /yass:seats limits); for the seats' status, switching seats by hand, pausing, or changing the switching rules.
+description: Set up and run yass, which keeps Claude Code on whichever subscription seat (account or setup-token key) still has room, by rules the owner states in plain words. Use for onboarding ("set up seats", "add an account/key"); for limits and usage questions in any language: how much is used or left across all seats, burn rate, runway, the pace and whether it lasts until the resets ("how's our pace", «как наш темп», «как ситуация», «хватит ли»), what a switch would cost, a limits summary ("limits", "how much is left", "usage summary", /yass:seats limits); for the seats' status, switching seats by hand, pausing, or changing the switching rules.
 ---
 
 # yass — Yet Another Seat Switcher for Claude Code
@@ -77,6 +77,22 @@ D=~/.yass; jq --arg m "<model>" --argjson n <15|30|60> '.model = $m | .check_eve
 D=~/.yass; cat "$D/config.json"; for id in $(ls "$D/seats"); do jq -c '{id, kind, label, owner, notes}' "$D/seats/$id/meta.json"; done
 jq -s -c 'group_by(.seat) | map(max_by(.t)) | .[] | {seat, h5, d7, h5_reset: (.h5_reset // 0 | strflocaltime("%a %H:%M")), d7_reset: (.d7_reset // 0 | strflocaltime("%a %H:%M")), at: (.t | strflocaltime("%H:%M"))}' "$D/usage.jsonl"; tail -n 10 "$D/journal.md"; tail -n 5 "$D/check.log"
 ```
+- **Pace** ("how's our pace", "how are we doing", "will it last", «как наш темп», «как ситуация», «как прогресс», «хватит ли»). The owner asks this many times a day: answer fast and cheap, from one gather, with no other files. If the active seat's last reading is over 15 minutes old, refresh it first with the first line of **Limits summary**.
+```bash
+D=~/.yass; date '+now %a %H:%M'; jq -c '{active, last_switch: (.last_switch // 0 | strflocaltime("%a %H:%M"))}' "$D/config.json"; jq -c . "$D/pending.json" 2>/dev/null
+for s in $(ls "$D/seats"); do jq -c '{id, kind, capacity, notes}' "$D/seats/$s/meta.json"; done
+jq -s -r 'group_by(.seat)[] | sort_by(.t) | "\(.[0].seat): " + ([.[] | select(.t > now - 86400) | "\(.t | strflocaltime("%H:%M")) \(.h5)/\(.d7)"] | .[-12:] | join(" ")) + " · 5h resets \(last.h5_reset // 0 | strflocaltime("%a %H:%M")), 7d \(last.d7_reset // 0 | strflocaltime("%a %H:%M"))"' "$D/usage.jsonl"
+jq -c '{at: (.t | strflocaltime("%a %H:%M")), from, to, total_tokens}' "$D/switches.jsonl" | tail -n 3
+```
+  Work it out once, in your head, without re-deriving what earlier answers in this conversation already settled:
+  - units: weigh 7-day points by the size of each seat's week, not of its 5-hour window: a Max 20x week holds about twice a Max 5x week, a Pro week about a third of one (weights 7 : 3.5 : 1 for `capacity` 20 / 5 / 1). Count everything in points of the biggest seat's week and say so once ("points of personal");
+  - burn now: the active seat's 7-day points per hour over its last hour of readings, in those units;
+  - spent today: since midnight, the rises of each login's 7-day window, plus a key's rises while it was the active seat (`switches.jsonl`); a key's rises while we were elsewhere are its owner's;
+  - room: a login's 7-day cap (from `policy.md`, read once per conversation) minus its use; a key's surplus: its cap minus its use minus its owner's trend until its reset (its notes, or its rises while we were elsewhere);
+  - forecast: the bottleneck is the next reset that brings a large fresh week (a login's, or a key's with surplus). Compare the room usable before it (a seat that resets earlier counts only what can be spent before its reset) with the need at today's and the last 24 hours' pace: enough, tight, or short by how much, and what would help (slowing down, a temporary rule for a key with surplus, one more key).
+
+  Answer in the owner's language in 6–8 lines: first the verdict (pace against what the room allows per day until the bottleneck, and the burn now); then one line per seat with its 5-hour % and its 7-day use/cap, each with the time until it resets ("in 3 h", «через 3 ч»), never a weekday or date, the current seat marked; a switch or plan only if it is new since the last answer; the forecast in 1–2 lines. No tables, no long command lines on screen. Read the journal only when a switch or plan needs explaining or the owner asks why.
+- **What a switch would cost** («сколько будет стоить переключение»): run the **Switch cost** block from step 2 of `../../agents/seat-check.md` (from this file) without its `tee`. Answer with the total, main sessions vs subagents, what it is in the target's 5-hour points (about 12 per 1M tokens ÷ the target's size), and whether waiting for the running subagents would bring it to 500k or less.
 - **Limits summary** ("how much is left", "limits", burn rate, «сколько осталось», `/yass:seats limits`). Refresh the current seat with one tiny request, then gather everything:
 ```bash
 D=~/.yass; id=$(jq -r .active "$D/config.json"); env -u CLAUDE_CODE_OAUTH_TOKEN YASS_CHILD=1 "${CLAUDE_CODE_EXECPATH:-claude}" -p ok --model haiku --setting-sources "" --tools "" --strict-mcp-config --no-session-persistence --system-prompt "Reply with exactly: ok" --output-format json | jq -c --arg seat "$id" '([(if type=="array" then .[] else . end) | select(.type=="rate_limit_event") | .rate_limit_info] | first) // empty | {t: (now|floor), seat: $seat, src: "probe", status, overage: .overageStatus, h5: ((.unifiedWindows.five_hour.utilization // 0)*100|round), h5_reset: .unifiedWindows.five_hour.resetsAt, d7: ((.unifiedWindows.seven_day.utilization // 0)*100|round), d7_reset: .unifiedWindows.seven_day.resetsAt}' >> "$D/usage.jsonl"
