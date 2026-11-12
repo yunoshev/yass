@@ -1,6 +1,6 @@
 ---
 name: seats
-description: Set up and run yass, which keeps Claude Code on whichever subscription seat (account or setup-token key) still has room, by rules the owner states in plain words. Use for onboarding ("set up seats", "add an account/key"); for limits and usage questions in any language: how much is used or left across all seats, burn rate, runway, the pace and whether it lasts until the resets ("how's our pace", «как наш темп», «как ситуация», «хватит ли»), what a switch would cost, a limits summary ("limits", "how much is left", "usage summary", /yass:seats limits); for the seats' status, switching seats by hand, pausing, or changing the switching rules.
+description: Set up and run yass, which keeps Claude Code on whichever subscription seat (account or setup-token key) still has room, by rules the owner states in plain words. Use for onboarding ("set up seats", "add an account/key"); for limits and usage questions in any language: how much is used or left across all seats, burn rate, runway, the pace, how much to lower it and whether it lasts the next 7 days ("how's our pace", "how much should I cut my pace", «как наш темп», «как ситуация», «хватит ли»), what a switch would cost, a limits summary ("limits", "how much is left", "usage summary", /yass:seats limits); for the seats' status, switching seats by hand, pausing, or changing the switching rules.
 ---
 
 # yass — Yet Another Seat Switcher for Claude Code
@@ -70,6 +70,17 @@ D=~/.yass; jq --arg m "<model>" --argjson n <15|30|60> '.model = $m | .check_eve
 
 **7. First check.** Start the seat-check agent with `Seat check. Trigger: manual.` (model from step 6) and show the result and the status.
 
+## Pace query (any session)
+
+Any Claude Code session on this computer, not only the one that runs yass, learns how its pace compares with what the seats can supply by working out the numbers below from `~/.yass` (the readings in `usage.jsonl`, `switches.jsonl`, each seat's `meta.json`, the policy's key floors). Read only these files: never a credential, no request to the API. The skill ships no script; a session that wants one for itself writes its own, kept outside the plugin.
+
+Work out and quote these lines, in the asker's language:
+1. **Spending**: the average u/day over the last 24 hours, spikes included, reading errors (such as another account's reading right after a `/login`) removed (a reading is an error when the seat's 7-day reset time changed since the previous reading and the new window began before that reading, or when the 7-day figure rose by more than 50 points plus 5 per hour; drop it); then the 1, 3, 12 and 24 h rates.
+2. **Sustainable**: the highest average u/day the supply holds over the next 7 days, looking 7 days ahead from now, rolling (no fixed horizon). The supply: each login's room to its caps now, a new week for each login whose 7-day reset falls inside those 7 days, and the keys' safe share as one pool (the keys have one owner: each key's cap minus that owner's climb until the key's own reset, at the higher of the measured rate and the policy's floor, plus 20%). A seat's room counts only until its reset; nights (00-08) at half pace.
+3. **Cut needed** and **risk**: the cut from line 1 to line 2, whether at the current pace the supply would run out at any hour of the next 7 days (and when first), and the hint "For a 7-day supply the average pace is better lowered by Z%. The session decides how."
+
+Line 4 says what we took from the keys this week against their safe share; line 5 holds the details. A unit (u) is a point of the biggest seat's week (beside a Max 20x login, a Max 5x point is 0.5 u). Pass the lines on as calm facts: the session decides for itself whether and how to spend less; never turn them into an order to stop, halt or hold back agents, and add no alarm words.
+
 ## Everyday requests
 
 - **Status.** Latest reading per seat, the rules in force and recent events (no secrets in these files):
@@ -77,7 +88,7 @@ D=~/.yass; jq --arg m "<model>" --argjson n <15|30|60> '.model = $m | .check_eve
 D=~/.yass; cat "$D/config.json"; for id in $(ls "$D/seats"); do jq -c '{id, kind, label, owner, notes}' "$D/seats/$id/meta.json"; done
 jq -s -c 'group_by(.seat) | map(max_by(.t)) | .[] | {seat, h5, d7, h5_reset: (.h5_reset // 0 | strflocaltime("%a %H:%M")), d7_reset: (.d7_reset // 0 | strflocaltime("%a %H:%M")), at: (.t | strflocaltime("%H:%M"))}' "$D/usage.jsonl"; tail -n 10 "$D/journal.md"; tail -n 5 "$D/check.log"
 ```
-- **Pace** ("how's our pace", "how are we doing", "will it last", «как наш темп», «как ситуация», «как прогресс», «хватит ли»). The owner asks this many times a day: answer fast and cheap, from one gather, with no other files. If the active seat's last reading is over 15 minutes old, refresh it first with the first line of **Limits summary**.
+- **Pace** ("how's our pace", "how are we doing", "will it last", «как наш темп», «как ситуация», «как прогресс», «хватит ли»). The owner asks this many times a day: answer fast and cheap, from the **Pace query** above plus one gather, with no other files. If the active seat's last reading is over 15 minutes old, refresh it first with the first line of **Limits summary**, then run the pace query.
 ```bash
 D=~/.yass; date '+now %a %H:%M'; jq -c '{active, last_switch: (.last_switch // 0 | strflocaltime("%a %H:%M"))}' "$D/config.json"; jq -c . "$D/pending.json" 2>/dev/null
 for s in $(ls "$D/seats"); do jq -c '{id, kind, capacity, notes}' "$D/seats/$s/meta.json"; done
@@ -89,9 +100,9 @@ jq -c '{at: (.t | strflocaltime("%a %H:%M")), from, to, total_tokens}' "$D/switc
   - burn now: the active seat's 7-day points per hour over its last hour of readings, in those units;
   - spent today: since midnight, the rises of each login's 7-day window, plus a key's rises while it was the active seat (`switches.jsonl`); a key's rises while we were elsewhere are its owner's;
   - room: a login's 7-day cap (from `policy.md`, read once per conversation) minus its use; a key's surplus: its cap minus its use minus its owner's trend until its reset (its notes, or its rises while we were elsewhere);
-  - forecast: the bottleneck is the next reset that brings a large fresh week (a login's, or a key's with surplus). Compare the room usable before it (a seat that resets earlier counts only what can be spent before its reset) with the need at today's and the last 24 hours' pace: enough, tight, or short by how much, and what would help (slowing down, a temporary rule for a key with surplus, one more key).
+  - forecast: 7 days ahead from now, rolling (no fixed horizon), as the pace query describes: whether the supply holds the last 24 hours' pace at every hour of the next 7 days (a seat's room counts only until its reset), and if not, when it first runs short and what would help (a lower average pace, a temporary rule for a key with surplus, one more key).
 
-  Answer in the owner's language in 6–8 lines: first the verdict (pace against what the room allows per day until the bottleneck, and the burn now); then one line per seat with its 5-hour % and its 7-day use/cap, each with the time until it resets ("in 3 h", «через 3 ч»), never a weekday or date, the current seat marked; a switch or plan only if it is new since the last answer; the forecast in 1–2 lines. No tables, no long command lines on screen. Read the journal only when a switch or plan needs explaining or the owner asks why.
+  Answer in the owner's language in 6–8 lines: first the verdict (the pace query's first 3 lines); then one line per seat with its 5-hour % and its 7-day use/cap, each with the time until it resets ("in 3 h", «через 3 ч»), never a weekday or date, the current seat marked; a switch or plan only if it is new since the last answer; the forecast in 1–2 lines. No tables, no long command lines on screen. Read the journal only when a switch or plan needs explaining or the owner asks why.
 - **What a switch would cost** («сколько будет стоить переключение»): run the **Switch cost** block from step 2 of `../../agents/seat-check.md` (from this file) without its `tee`. Answer with the total, main sessions vs subagents, what it is in the target's 5-hour points (about 12 per 1M tokens ÷ the target's size), and whether waiting for the running subagents would bring it to 500k or less.
 - **Limits summary** ("how much is left", "limits", burn rate, «сколько осталось», `/yass:seats limits`). Refresh the current seat with one tiny request, then gather everything:
 ```bash
