@@ -183,6 +183,11 @@ else case "$(uname -s)" in Darwin) osascript -e "display notification \"Type /lo
 
 A probe is one tiny request on a seat, and Claude Code reports that seat's windows back. Always probe the current seat. Probe another seat only when its latest reading in `usage.jsonl` is older than 60 minutes **and** either the trigger is `compact`/`manual`/`limit` or the current seat is within 15 points of a cap in its policy. A `key` seat is the exception: probe it whenever its latest reading is older than 2 hours, whatever the trigger (the policy asks for a probe of each key every 2–3 hours, because the owner's rate of a key and its surplus come from these readings). A probe opens the 5-hour window of an idle seat, so don't probe for nothing. A `login` seat is the same exception as a key: after the renewal step, probe it whenever its latest reading is older than 2 hours, whatever the trigger, so no login's numbers go stale. An expired token is no reason to skip a login: the renewal block works on an expired token as well (it renews from the refresh token), so run it first and then probe. Only a login whose renewal was refused twice (`needs_login`) stays unmeasured; say so at once, with its age and the room it holds, and never pass an old reading off as a measured one. A window whose reset has passed counts as 0% only as a stated estimate. Never probe or choose a seat with `needs_login`.
 
+Which seats are due for a probe by age: run this, and probe every seat it prints (after the renewal step), whatever the trigger. Do not decide this by eye; a seat it prints is due, and "not due" for it is wrong.
+```bash
+D=~/.yass; for s in $(ls "$D/seats"); do jq -e '.needs_login' "$D/seats/$s/meta.json" >/dev/null 2>&1 && continue; t=$(jq -r --arg s "$s" 'select(.seat == $s and .src == "probe") | .t' "$D/usage.jsonl" 2>/dev/null | tail -1); [ $(( $(date +%s) - ${t:-0} )) -gt 7200 ] && echo "due: $s (last probe $(( ($(date +%s) - ${t:-0}) / 60 )) min ago)"; done
+```
+
 Current seat (the store's login):
 ```bash
 D=~/.yass; C="${CLAUDE_CODE_EXECPATH:-$HOME/.local/bin/claude}"
