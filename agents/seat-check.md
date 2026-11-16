@@ -261,9 +261,9 @@ First run step 1's identify block again (the second block there, not the lock): 
 a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap or cut off (a `limit` check); journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
-D=~/.yass; S="$D/seats/<from>"; (umask 077; store > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
+D=~/.yass; S="$D/seats/<from>"; a=$(jq -r '[.oauthAccount.accountUuid, .oauthAccount.organizationUuid] | join(" ")' ~/.claude.json); [ "$a" = "$(jq -r '[.accountUuid, .organizationUuid] | join(" ")' "$S/account.json" 2>/dev/null)" ] || { echo "NOT SAVED: the store now holds another account (a /login during this run)"; false; } && (umask 077; store > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
 ```
-If it says `NOT SAVED`, stop.
+If it says `NOT SAVED`, stop. `NOT SAVED: the store now holds another account` means the owner ran `/login` while this run worked: never save that login under `<from>`; journal it and stop, and the next check identifies the new login.
 
 Then record what the switch costs: run the **Switch cost** block from step 2 again (this run may be a planned switch, long after the measuring), then:
 ```bash
