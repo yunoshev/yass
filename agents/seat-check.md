@@ -55,13 +55,23 @@ Only two recipes touch the store; everything else works on files. Unknown platfo
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
 ```
 
-**R2, write seat `<to>` into the store** (the macOS value goes in hex over stdin, never in a process's arguments; the Linux file is replaced atomically):
+**R1b, MCP logins are machine-wide, not per seat.** The store holds two keys: `claudeAiOauth` (the seat's own login) and `mcpOAuth` (the tokens of local MCP servers, e.g. `higgsfield|<hash>`). Replacing the whole store on a switch would drop the MCP logins made under another seat, so every write of a login into the store or into a seat file sets `mcpOAuth` to the merge of all known copies: the store now and every `seats/*/credentials.json` and `credentials.prev.json`. Per server (the key's part before `|`) the entry wins that has a non-empty `accessToken`, then the latest `expiresAt`, then a `refreshToken`. Only `claudeAiOauth` comes from the seat. `withmcp` filters a login's JSON on stdin; no token is ever printed. Blocks that use it define it after `store`, with `D` set before it is called:
 ```bash
+mcp() { for f in "$D"/seats/*/credentials.json "$D"/seats/*/credentials.prev.json; do jq -c '.mcpOAuth // {}' "$f" 2>/dev/null; done; store | jq -c '.mcpOAuth // {}' 2>/dev/null; }
+withmcp() { jq -c --argjson m "$(mcp | jq -s -c '[.[] | to_entries[]] | group_by(.key | split("|")[0]) | map(max_by([((.value.accessToken // "") != ""), (.value.expiresAt // 0), ((.value.refreshToken // "") != "")])) | from_entries')" 'if ($m | length) > 0 then .mcpOAuth = $m else . end'; }
+```
+
+**R2, write seat `<to>` into the store** (with the merged `mcpOAuth` of R1b; the macOS value goes in hex over stdin, never in a process's arguments; the Linux file is replaced atomically):
+```bash
+store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
+mcp() { for f in "$D"/seats/*/credentials.json "$D"/seats/*/credentials.prev.json; do jq -c '.mcpOAuth // {}' "$f" 2>/dev/null; done; store | jq -c '.mcpOAuth // {}' 2>/dev/null; }
+withmcp() { jq -c --argjson m "$(mcp | jq -s -c '[.[] | to_entries[]] | group_by(.key | split("|")[0]) | map(max_by([((.value.accessToken // "") != ""), (.value.expiresAt // 0), ((.value.refreshToken // "") != "")])) | from_entries')" 'if ($m | length) > 0 then .mcpOAuth = $m else . end'; }
 D=~/.yass; F="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"; T="$D/seats/<to>/credentials.json"
+p=$(withmcp < "$T"); [ -n "$p" ] || p=$(tr -d '\n' < "$T")
 case "$(uname -s)" in
   Darwin) acct=$(security find-generic-password -s "Claude Code-credentials" 2>/dev/null | sed -n 's/.*"acct"<blob>="\(.*\)"/\1/p')
-    printf 'add-generic-password -U -a "%s" -s "Claude Code-credentials" -X %s\n' "${acct:-$USER}" "$(tr -d '\n' < "$T" | xxd -p | tr -d '\n')" | security -i >/dev/null 2>&1 ;;
-  Linux) (umask 077; cp "$T" "$F.yass" && mv "$F.yass" "$F") ;;
+    printf 'add-generic-password -U -a "%s" -s "Claude Code-credentials" -X %s\n' "${acct:-$USER}" "$(printf %s "$p" | xxd -p | tr -d '\n')" | security -i >/dev/null 2>&1 ;;
+  Linux) (umask 077; printf %s "$p" > "$F.yass" && mv "$F.yass" "$F") ;;
 esac
 ```
 Then check:
@@ -263,10 +273,12 @@ D=~/.yass; jq -n -c --argjson now $(date +%s) --argjson p "$(jq .id "$D/pending.
 
 First run step 1's identify block again (the second block there, not the lock): go on only if it still names `<from>` as the current seat. Otherwise the login changed since step 1 (a `/login`): journal it and go to step 5. If `<to>` is the current seat already, there is nothing to switch: `rm -f ~/.yass/run/pending.taken` and go to step 5.
 
-a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap or cut off (a `limit` check); journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair):
+a. **Only from a `login` seat:** if `<from>`'s token expires within 15 minutes, a session may be renewing it right now and would write it back over the new seat. Then don't switch unless the current seat is already at a cap or cut off (a `limit` check); journal "switch deferred". If this was a planned switch, put the plan back to wait out the renewal: `D=~/.yass; mkdir -p "$D/run"; jq '.after = (now|floor) + 900' "$D/run/pending.taken" > "$D/pending.json" && rm -f "$D/run/pending.taken"`. Otherwise save the current login back to its seat first (logins rotate their tokens; the file must hold the newest pair, and its `mcpOAuth` is the merge of R1b):
 ```bash
 store() { case "$(uname -s)" in Darwin) security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null ;; Linux) cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null ;; *) echo "unsupported platform: $(uname -s)" >&2 ;; esac; }
-D=~/.yass; S="$D/seats/<from>"; a=$(jq -r '[.oauthAccount.accountUuid, .oauthAccount.organizationUuid] | join(" ")' ~/.claude.json); [ "$a" = "$(jq -r '[.accountUuid, .organizationUuid] | join(" ")' "$S/account.json" 2>/dev/null)" ] || { echo "NOT SAVED: the store now holds another account (a /login during this run)"; false; } && (umask 077; store > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
+mcp() { for f in "$D"/seats/*/credentials.json "$D"/seats/*/credentials.prev.json; do jq -c '.mcpOAuth // {}' "$f" 2>/dev/null; done; store | jq -c '.mcpOAuth // {}' 2>/dev/null; }
+withmcp() { jq -c --argjson m "$(mcp | jq -s -c '[.[] | to_entries[]] | group_by(.key | split("|")[0]) | map(max_by([((.value.accessToken // "") != ""), (.value.expiresAt // 0), ((.value.refreshToken // "") != "")])) | from_entries')" 'if ($m | length) > 0 then .mcpOAuth = $m else . end'; }
+D=~/.yass; S="$D/seats/<from>"; a=$(jq -r '[.oauthAccount.accountUuid, .oauthAccount.organizationUuid] | join(" ")' ~/.claude.json); [ "$a" = "$(jq -r '[.accountUuid, .organizationUuid] | join(" ")' "$S/account.json" 2>/dev/null)" ] || { echo "NOT SAVED: the store now holds another account (a /login during this run)"; false; } && (umask 077; store | withmcp > "$S/credentials.new") && jq -e '.claudeAiOauth.refreshToken | length > 0' "$S/credentials.new" >/dev/null 2>&1 && cp "$S/credentials.json" "$S/credentials.prev.json" && mv "$S/credentials.new" "$S/credentials.json" && echo saved || { rm -f "$S/credentials.new"; echo "NOT SAVED"; }
 ```
 If it says `NOT SAVED`, stop. `NOT SAVED: the store now holds another account` means the owner ran `/login` while this run worked: never save that login under `<from>`; journal it and stop, and the next check identifies the new login.
 

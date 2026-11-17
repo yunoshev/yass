@@ -72,6 +72,7 @@ Requirements:
 
 - Tokens never reach a model. Prompts move them file-to-file inside shell commands and compare them only by hash. The seat files are `0600` in a `0700` folder.
 - `/logout` revokes the login it ends, so the prompts never use it. `/login` alone is safe.
+- MCP logins (the `mcpOAuth` key next to `claudeAiOauth` in the store, e.g. Higgsfield) belong to the machine, not to a seat. Every write of a login into the store, and every save-back into a seat, sets `mcpOAuth` to the merge of the store and all saved seat files (`credentials.json` and `.prev`): per server the entry with a token and the latest expiry wins. A switch no longer logs you out of MCP servers. Only `claudeAiOauth` comes from the seat.
 - A login rotates its refresh token. Before every switch the current login is saved back to its seat, with the previous copy kept as `credentials.prev.json`. Swaps also wait while a login is about to renew.
 - An idle login is renewed before its saved access token runs out (it lasts about 8 hours): yass copies the login into a scratch config directory (`~/.yass/run/renew`), lets the official `claude` binary renew it there with one tiny request, saves the renewed login back (the previous copy kept) and removes the scratch copy. Never the login in use: the sessions renew that one. A login that no longer renews is marked as needing one `/login` and you are told, before a switch to it could log the sessions out.
 - Sessions that run on `CLAUDE_CODE_OAUTH_TOKEN` or an API key don't use the login store. The tool leaves them alone.
